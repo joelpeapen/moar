@@ -10,7 +10,7 @@ type PagerModeViewing struct {
 }
 
 func (m PagerModeViewing) drawFooter(statusText string, spinner string) {
-	helpText := "Press 'ESC' / 'q' to exit, '/' to search, 'h' for help"
+	helpText := "Press 'ESC' / 'q' to exit, '/' to search, 'f1' for help"
 	if m.pager.isShowingHelp {
 		helpText = "Press 'ESC' / 'q' to exit help, '/' to search"
 	}
@@ -64,22 +64,7 @@ func (m PagerModeViewing) onKey(keyCode twin.KeyCode) {
 		p.scrollPosition = p.scrollPosition.NextLine(p.visibleHeight())
 		p.handleScrolledDown()
 
-	default:
-		log.Debugf("Unhandled key event %v", keyCode)
-	}
-}
-
-func (m PagerModeViewing) onRune(char rune) {
-	p := m.pager
-
-	switch char {
-	case 'q':
-		p.Quit()
-
-	case 'v':
-		handleEditingRequest(p)
-
-	case 'h':
+	case twin.KeyF1:
 		if p.isShowingHelp {
 			break
 		}
@@ -96,8 +81,29 @@ func (m PagerModeViewing) onRune(char rune) {
 		p.TargetLineNumber = nil
 		p.isShowingHelp = true
 
+	default:
+		log.Debugf("Unhandled key event %v", keyCode)
+	}
+}
+
+func (m PagerModeViewing) onRune(char rune) {
+	p := m.pager
+
+	switch char {
+	case 'q':
+		p.Quit()
+
+	case 'v':
+		handleEditingRequest(p)
+
 	case '=':
 		p.ShowStatusBar = !p.ShowStatusBar
+
+	case 'h':
+		p.moveRight(-p.SideScrollAmount)
+
+	case 'l':
+		p.moveRight(p.SideScrollAmount)
 
 	// '\x10' = CTRL-p, should scroll up one line.
 	// Ref: https://github.com/walles/moar/issues/107#issuecomment-1328354080
