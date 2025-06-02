@@ -370,7 +370,7 @@ func pagerFromArgs(
 	scrollRightHint := flagSetFunc(flagSet, "scroll-right-hint",
 		twin.NewStyledRune('>', twin.StyleDefault.WithAttr(twin.AttrReverse)),
 		"Shown when view can scroll right. One character with optional ANSI highlighting.", parseScrollHint)
-	shift := flagSetFunc(flagSet, "shift", 16, "Horizontal scroll `amount` >=1, defaults to 16", parseShiftAmount)
+	shift := flagSetFunc(flagSet, "shift", 1, "Horizontal scroll defaults to 1", parseShiftAmount)
 	mouseMode := flagSetFunc(
 		flagSet,
 		"mousemode",

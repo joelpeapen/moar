@@ -44,10 +44,16 @@ func (m PagerModeViewing) onKey(keyCode twin.KeyCode) {
 		p.moveRight(-p.SideScrollAmount)
 
 	case twin.KeyAltRight:
-		p.moveRight(1)
+		p.moveRight(10)
 
 	case twin.KeyAltLeft:
-		p.moveRight(-1)
+		p.moveRight(-10)
+
+	case twin.RuneKeyAltRight:
+		p.moveRight(10)
+
+	case twin.RuneKeyAltLeft:
+		p.moveRight(-10)
 
 	case twin.KeyHome:
 		p.scrollPosition = newScrollPosition("Pager scroll position")

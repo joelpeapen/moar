@@ -19,6 +19,9 @@ const (
 	KeyAltRight
 	KeyAltLeft
 
+	RuneKeyAltRight
+	RuneKeyAltLeft
+
 	KeyHome
 	KeyEnd
 	KeyPgUp
@@ -59,10 +62,13 @@ var escapeSequenceToKeyCode = map[string]KeyCode{
 	"\x1bOC": KeyRight,
 	"\x1bOD": KeyLeft,
 
-	"\x1b\x1b[A": KeyAltUp,    // Alt + up arrow
-	"\x1b\x1b[B": KeyAltDown,  // Alt + down arrow
-	"\x1b\x1b[C": KeyAltRight, // Alt + right arrow
-	"\x1b\x1b[D": KeyAltLeft,  // Alt + left arrow
+	"\x1bl": RuneKeyAltRight, // Alt + l
+	"\x1bh": RuneKeyAltLeft,  // Alt + h
+
+	"\x1b[1;3A": KeyAltUp,    // Alt + up arrow
+	"\x1b[1;3B": KeyAltDown,  // Alt + down arrow
+	"\x1b[1;3C": KeyAltRight, // Alt + right arrow
+	"\x1b[1;3D": KeyAltLeft,  // Alt + left arrow
 
 	"\x1b[H":  KeyHome,
 	"\x1b[F":  KeyEnd,

@@ -178,7 +178,7 @@ func NewPager(r *Reader) *Pager {
 		ShowLineNumbers:  true,
 		ShowStatusBar:    true,
 		DeInit:           true,
-		SideScrollAmount: 16,
+		SideScrollAmount: 1,
 		ScrollLeftHint:   twin.NewStyledRune('<', twin.StyleDefault.WithAttr(twin.AttrReverse)),
 		ScrollRightHint:  twin.NewStyledRune('>', twin.StyleDefault.WithAttr(twin.AttrReverse)),
 		scrollPosition:   newScrollPosition(name),
