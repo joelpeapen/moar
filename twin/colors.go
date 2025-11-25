@@ -99,13 +99,14 @@ func (color Color) colorValue() uint32 {
 // Ref: https://en.wikipedia.org/wiki/ANSI_escape_code#SGR_(Select_Graphic_Rendition)_parameters
 func (color Color) ansiString(cType colorType, terminalColorCount ColorCount) string {
 	var typeMarker string
-	if cType == colorTypeForeground {
+	switch cType {
+	case colorTypeForeground:
 		typeMarker = "3"
-	} else if cType == colorTypeBackground {
+	case colorTypeBackground:
 		typeMarker = "4"
-	} else if cType == colorTypeUnderline {
+	case colorTypeUnderline:
 		typeMarker = "5"
-	} else {
+	default:
 		panic(fmt.Errorf("unhandled color type %d", cType))
 	}
 
@@ -248,9 +249,12 @@ func (color Color) downsampleTo(terminalColorCount ColorCount) Color {
 // The result from this function has been scaled to 0.0-1.0, where 1.0 is the
 // distance between black and white.
 func (color Color) Distance(other Color) float64 {
-	if color.ColorCount() != ColorCount24bit {
-		panic(fmt.Errorf("contrast only supported for 24 bit colors, got %s vs %s", color.String(), other.String()))
+	if color == ColorDefault || other == ColorDefault {
+		panic(fmt.Errorf("calculating distance to or from default color not supported, %s <-> %s", color.String(), other.String()))
 	}
+
+	color = color.to24Bit()
+	other = other.to24Bit()
 
 	baseColor := chroma.NewColour(
 		uint8(color.colorValue()>>16&0xff),
@@ -267,4 +271,34 @@ func (color Color) Distance(other Color) float64 {
 	// Magic constant comes from testing
 	maxDistance := 764.8333151739665
 	return baseColor.Distance(otherColor) / maxDistance
+}
+
+// With weight 0.0 you'll get only color. With weight 1.0 you'll get only other.
+func (color Color) Mix(other Color, weight float64) Color {
+	if color.ColorCount() == ColorCountDefault || other.ColorCount() == ColorCountDefault {
+		panic(fmt.Errorf("mixing to or from default color not supported, %s <-> %s", color.String(), other.String()))
+	}
+	if weight < 0.0 || weight > 1.0 {
+		panic(fmt.Errorf("weight must be 0.0-1.0, got %f", weight))
+	}
+
+	c1_24 := color.to24Bit()
+	c2_24 := other.to24Bit()
+
+	c1_value := c1_24.colorValue()
+	c1_red := (c1_value & 0xff0000) >> 16
+	c1_green := (c1_value & 0xff00) >> 8
+	c1_blue := c1_value & 0xff
+
+	c2_value := c2_24.colorValue()
+	c2_red := (c2_value & 0xff0000) >> 16
+	c2_green := (c2_value & 0xff00) >> 8
+	c2_blue := c2_value & 0xff
+
+	// Mix the channels separately
+	mixed_red := uint8(math.Round(float64(c2_red)*weight + float64(c1_red)*(1-weight)))
+	mixed_green := uint8(math.Round(float64(c2_green)*weight + float64(c1_green)*(1-weight)))
+	mixed_blue := uint8(math.Round(float64(c2_blue)*weight + float64(c1_blue)*(1-weight)))
+
+	return NewColor24Bit(mixed_red, mixed_green, mixed_blue)
 }
