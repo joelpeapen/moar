@@ -1,5 +1,4 @@
 //go:build windows
-// +build windows
 
 package twin
 
@@ -58,8 +57,8 @@ func (r *interruptableReaderImpl) Interrupt() {
 	// should at least not cause any shutdown issues on Windows.
 	//
 	// Ref:
-	// * https://github.com/walles/moar/issues/217
-	// * https://github.com/walles/moar/issues/221
+	// * https://github.com/walles/moor/issues/217
+	// * https://github.com/walles/moor/issues/221
 	r.shutdownRequested.Store(true)
 }
 

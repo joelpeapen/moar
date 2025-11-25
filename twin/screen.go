@@ -1,4 +1,4 @@
-// Package twin provides Terminal Window interaction
+// Package twin provides Terminal Window Interaction
 package twin
 
 import (
@@ -8,6 +8,8 @@ import (
 	"runtime/debug"
 	"strconv"
 	"strings"
+	"sync"
+	"time"
 	"unicode/utf8"
 
 	log "github.com/sirupsen/logrus"
@@ -64,13 +66,8 @@ type Screen interface {
 	// If the position is outside of the screen, the cursor will be hidden.
 	ShowCursorAt(column int, row int)
 
-	// RequestTerminalBackgroundColor() asks the terminal to report its
-	// background color.
-	//
-	// If your terminal supports background color queries and it responds, the
-	// result will be reported as an EventTerminalBackgroundDetected on the
-	// Events() channel.
-	RequestTerminalBackgroundColor()
+	// Can be nil if not (yet?) detected
+	TerminalBackground() *Color
 
 	// This channel is what your main loop should be checking.
 	Events() chan Event
@@ -83,10 +80,22 @@ type interruptableReader interface {
 	Interrupt()
 }
 
+type lastRendered struct {
+	width  int
+	height int
+	cells  [][]StyledRune
+}
+
 type UnixScreen struct {
 	widthAccessFromSizeOnly  int // Access from Size() method only
 	heightAccessFromSizeOnly int // Access from Size() method only
-	cells                    [][]StyledRune
+
+	terminalBackground      *Color
+	terminalBackgroundQuery *time.Time // When we asked for the terminal background color
+	terminalBackgroundLock  sync.Mutex
+
+	cells        [][]StyledRune
+	lastRendered lastRendered
 
 	// Note that the type here doesn't matter, we only want to know whether or
 	// not this channel has been signalled
@@ -142,7 +151,7 @@ func NewScreenWithMouseModeAndColorCount(mouseMode MouseMode, terminalColorCount
 
 	// The number "80" here is from manual testing on my MacBook:
 	//
-	// First, start "./moar.sh sample-files/large-git-log-patch.txt".
+	// First, start "./moor.sh sample-files/large-git-log-patch.txt".
 	//
 	// Then do a two finger flick initiating a momentum based scroll-up.
 	//
@@ -150,7 +159,7 @@ func NewScreenWithMouseModeAndColorCount(mouseMode MouseMode, terminalColorCount
 	//
 	// By this definition, 40 was too small, and 80 was OK.
 	//
-	// Bumped to 160 because of: https://github.com/walles/moar/issues/164
+	// Bumped to 160 because of: https://github.com/walles/moor/issues/164
 	screen.events = make(chan Event, 160)
 
 	screen.setupSigwinchNotification()
@@ -169,13 +178,14 @@ func NewScreenWithMouseModeAndColorCount(mouseMode MouseMode, terminalColorCount
 
 	screen.setAlternateScreenMode(true)
 
-	if mouseMode == MouseModeAuto {
+	switch mouseMode {
+	case MouseModeAuto:
 		screen.enableMouseTracking(!terminalHasArrowKeysEmulation())
-	} else if mouseMode == MouseModeSelect {
+	case MouseModeSelect:
 		screen.enableMouseTracking(false)
-	} else if mouseMode == MouseModeScroll {
+	case MouseModeScroll:
 		screen.enableMouseTracking(true)
-	} else {
+	default:
 		panic(fmt.Errorf("unknown mouse mode: %d", mouseMode))
 	}
 
@@ -188,6 +198,17 @@ func NewScreenWithMouseModeAndColorCount(mouseMode MouseMode, terminalColorCount
 
 		screen.mainLoop()
 	}()
+
+	// Request terminal background color. The response will be handled in
+	// screen.mainLoop() that we just started ^.
+	//
+	// Ref:
+	// https://stackoverflow.com/questions/2507337/how-to-determine-a-terminals-background-color
+	fmt.Println("\x1b]11;?\x07")
+	screen.terminalBackgroundLock.Lock()
+	defer screen.terminalBackgroundLock.Unlock()
+	now := time.Now()
+	screen.terminalBackgroundQuery = &now
 
 	return &screen, nil
 }
@@ -208,9 +229,9 @@ func (screen *UnixScreen) Close() {
 	err := screen.restoreTtyInTtyOut()
 	if err != nil {
 		// Debug logging because this is expected to fail in some cases:
-		// * https://github.com/walles/moar/issues/145
-		// * https://github.com/walles/moar/issues/149
-		// * https://github.com/walles/moar/issues/150
+		// * https://github.com/walles/moor/issues/145
+		// * https://github.com/walles/moor/issues/149
+		// * https://github.com/walles/moor/issues/150
 		log.Info("Problem restoring TTY state: ", err)
 	}
 }
@@ -232,7 +253,14 @@ func (screen *UnixScreen) setAlternateScreenMode(enable bool) {
 	// Ref: https://stackoverflow.com/a/11024208/473672
 	if enable {
 		screen.write("\x1b[?1049h")
+
+		// Enable alternateScroll mode. This makes the mouse wheel work without
+		// blocking selection.
+		//
+		// Ref: https://github.com/walles/moor/issues/53#issuecomment-3392572761
+		screen.write("\x1b[?1007h")
 	} else {
+		screen.write("\x1b[?1007l")
 		screen.write("\x1b[?1049l")
 	}
 }
@@ -272,19 +300,16 @@ func (screen *UnixScreen) onWindowResized() {
 //
 // For those that do, we're better off without mouse tracking.
 //
-// To test your terminal, run with `moar --mousemode=mark` and see if mouse
+// To test your terminal, run with `moor --mousemode=mark` and see if mouse
 // scrolling still works (both down and then back up to the top). If it does,
 // add another check to this function!
 //
-// See also: https://github.com/walles/moar/issues/53
+// See also: https://github.com/walles/moor/issues/53
 func terminalHasArrowKeysEmulation() bool {
-	// Untested:
-	// * The Windows terminal
-
 	// Better off with mouse tracking:
-	// * iTerm2 (macOS)
 	// * Terminal.app (macOS)
 	// * Contour, thanks to @postsolar (GitHub username) for testing, 2023-12-18
+	// * Foot, thanks to @postsolar (GitHub username) for testing, 2023-12-19
 
 	// Hyper, tested on macOS, December 14th 2023
 	if os.Getenv("TERM_PROGRAM") == "Hyper" {
@@ -372,6 +397,27 @@ func terminalHasArrowKeysEmulation() bool {
 		return true
 	}
 
+	// Windows Terminal, tested here:
+	// https://github.com/walles/moor/issues/53#issuecomment-3276404279
+	if os.Getenv("WT_SESSION") != "" {
+		log.Info("Windows Terminal detected, assuming arrow keys emulation active")
+		return true
+	}
+
+	// iTerm2, supports alternateScroll mode, and therefore works with "select"
+	if os.Getenv("TERM_PROGRAM") == "iTerm.app" {
+		log.Info("iTerm2 terminal detected, gets arrow keys emulation through alternateScroll mode")
+		return true
+	}
+
+	// In ssh sessions we can't detect the terminal, but most terminals support
+	// "select" mode, especially now that we activate alternateScroll as well.
+	// Go for select.
+	if os.Getenv("SSH_CONNECTION") != "" || os.Getenv("SSH_CLIENT") != "" || os.Getenv("SSH_TTY") != "" {
+		log.Info("SSH session detected, assuming arrow keys emulation active since most terminals support it, especially with alternateScroll mode active")
+		return true
+	}
+
 	log.Info("No known terminal with arrow keys emulation detected, assuming mouse tracking is needed")
 	return false
 }
@@ -430,9 +476,9 @@ func (screen *UnixScreen) mainLoop() {
 		count, err := screen.ttyInReader.Read(buffer)
 		if err != nil {
 			// Ref:
-			// * https://github.com/walles/moar/issues/145
-			// * https://github.com/walles/moar/issues/149
-			// * https://github.com/walles/moar/issues/150
+			// * https://github.com/walles/moor/issues/145
+			// * https://github.com/walles/moor/issues/149
+			// * https://github.com/walles/moor/issues/150
 			log.Info("ttyin read error, twin giving up: ", err)
 
 			screen.events <- EventExit{}
@@ -445,14 +491,11 @@ func (screen *UnixScreen) mainLoop() {
 			bg, valid := parseTerminalBgColorResponse(incompleteResponse)
 			if valid {
 				if bg != nil {
-					select {
-					case screen.events <- EventTerminalBackgroundDetected{Color: *bg}:
-						// Yay
-					default:
-						// If this happens, consider increasing the channel size in
-						// NewScreen()
-						log.Debugf("Unable to post terminal background color detected event")
-					}
+					screen.terminalBackgroundLock.Lock()
+					screen.terminalBackground = bg
+					log.Debug("Terminal background color detected as ", bg, " after ", time.Since(*screen.terminalBackgroundQuery))
+					screen.terminalBackgroundLock.Unlock()
+
 					expectingTerminalBackgroundColor = false
 					incompleteResponse = nil
 				}
@@ -613,12 +656,9 @@ func (screen *UnixScreen) Size() (width int, height int) {
 	}
 
 	newCells := make([][]StyledRune, height)
-	for rowNumber := 0; rowNumber < height; rowNumber++ {
+	for rowNumber := range height {
 		newCells[rowNumber] = make([]StyledRune, width)
 	}
-
-	// FIXME: Copy any existing contents over to the new, resized screen array
-	// FIXME: Fill any non-initialized cells with whitespace
 
 	screen.widthAccessFromSizeOnly = width
 	screen.heightAccessFromSizeOnly = height
@@ -627,10 +667,49 @@ func (screen *UnixScreen) Size() (width int, height int) {
 	return screen.widthAccessFromSizeOnly, screen.heightAccessFromSizeOnly
 }
 
-func (screen *UnixScreen) RequestTerminalBackgroundColor() {
-	// Ref:
-	// https://stackoverflow.com/questions/2507337/how-to-determine-a-terminals-background-color
-	fmt.Println("\x1b]11;?\x07")
+// The first time you call this, there may be a delay of up to 50ms while we
+// wait for the terminal to respond to our background color query. After that,
+// it will be instant.
+//
+// Returns the terminal background color if known, nil otherwise.
+func (screen *UnixScreen) TerminalBackground() *Color {
+	const maxWait = 50 * time.Millisecond
+
+	// Is it already known?
+	screen.terminalBackgroundLock.Lock()
+	if screen.terminalBackground != nil || time.Since(*screen.terminalBackgroundQuery) > maxWait {
+		// Either we know the color or we gave up waiting for it. Return it!
+		background := screen.terminalBackground
+		screen.terminalBackgroundLock.Unlock()
+		return background
+	}
+	screen.terminalBackgroundLock.Unlock()
+
+	// Wait at most 50ms in total for the background to be detected
+	screen.terminalBackgroundLock.Lock()
+	start := screen.terminalBackgroundQuery
+	screen.terminalBackgroundLock.Unlock()
+
+	for time.Since(*start) < maxWait {
+		screen.terminalBackgroundLock.Lock()
+		if screen.terminalBackground != nil {
+			// There it is!
+			background := screen.terminalBackground
+			screen.terminalBackgroundLock.Unlock()
+			return background
+		}
+
+		// Unlock so the other goroutine can set it
+		screen.terminalBackgroundLock.Unlock()
+
+		// It's not more urgent than this
+		time.Sleep(5 * time.Millisecond)
+	}
+
+	// The wait is over, return whatever we have
+	screen.terminalBackgroundLock.Lock()
+	defer screen.terminalBackgroundLock.Unlock()
+	return screen.terminalBackground
 }
 
 func parseTerminalBgColorResponse(responseBytes []byte) (*Color, bool) {
@@ -642,40 +721,45 @@ func parseTerminalBgColorResponse(responseBytes []byte) (*Color, bool) {
 
 	response := string(responseBytes)
 	if !strings.HasPrefix(response, prefix) {
-		log.Debug("Got unexpected prefix in bg color response from terminal: ", string(responseBytes))
+		log.Info("Got unexpected prefix in bg color response from terminal: <", humanizeLowASCII(string(responseBytes)), ">")
 		return nil, false // Invalid
 	}
 	response = strings.TrimPrefix(response, prefix)
 
 	isComplete := strings.HasSuffix(response, suffix1) || strings.HasSuffix(response, suffix2)
 	if !isComplete && (len(responseBytes) < len(sampleResponse1) || len(responseBytes) < len(sampleResponse2)) {
-		log.Debug("Terminal bg color response received so far: ", response)
+		log.Trace("Terminal bg color response received so far: <", humanizeLowASCII(response), ">")
 		return nil, true // Incomplete but valid
 	}
 
 	if !isComplete {
-		log.Debug("Got unexpected suffix in bg color response from terminal: ", string(responseBytes))
+		log.Info("Got unexpected suffix in bg color response from terminal: <", humanizeLowASCII(string(responseBytes)), ">")
 		return nil, false // Invalid
 	}
 	response = strings.TrimSuffix(response, suffix1)
 	response = strings.TrimSuffix(response, suffix2)
 
+	if len(response) != 14 {
+		log.Info("Got unexpected length bg color response from terminal: <", humanizeLowASCII(string(responseBytes)), ">")
+		return nil, false // Invalid
+	}
+
 	// response is now "RRRR/GGGG/BBBB"
 	red, err := strconv.ParseUint(response[0:4], 16, 16)
 	if err != nil {
-		log.Debug("Failed parsing red in bg color response from terminal: ", string(responseBytes), ": ", err)
+		log.Info("Failed parsing red in bg color response from terminal: <", humanizeLowASCII(string(responseBytes)), ">: ", err)
 		return nil, false // Invalid
 	}
 
 	green, err := strconv.ParseUint(response[5:9], 16, 16)
 	if err != nil {
-		log.Debug("Failed parsing green in bg color response from terminal: ", string(responseBytes), ": ", err)
+		log.Info("Failed parsing green in bg color response from terminal: <", humanizeLowASCII(string(responseBytes)), ">: ", err)
 		return nil, false // Invalid
 	}
 
 	blue, err := strconv.ParseUint(response[10:14], 16, 16)
 	if err != nil {
-		log.Debug("Failed parsing blue in bg color response from terminal: ", string(responseBytes), ": ", err)
+		log.Info("Failed parsing blue in bg color response from terminal: <", humanizeLowASCII(string(responseBytes)), ">: ", err)
 		return nil, false // Invalid
 	}
 
@@ -708,7 +792,14 @@ func (screen *UnixScreen) SetCell(column int, row int, styledRune StyledRune) in
 
 	screen.cells[row][column] = styledRune
 
-	return styledRune.Width()
+	runeWidth := styledRune.Width()
+	if runeWidth == 0 {
+		// This happens for unprintable runes. But we were asked to set
+		// something in this screen cell, so unprintable or not this will count
+		// as one cell wide.
+		return 1
+	}
+	return runeWidth
 }
 
 func (screen *UnixScreen) Clear() {
@@ -784,9 +875,7 @@ func renderLine(row []StyledRune, width int, terminalColorCount ColorCount) (str
 	builder.WriteString("\x1b[m")
 	lastStyle := StyleDefault
 
-	for column := 0; column < len(row); column++ {
-		cell := row[column]
-
+	for _, cell := range row {
 		style := cell.Style
 		runeToWrite := cell.Rune
 		if !Printable(runeToWrite) {
@@ -805,6 +894,13 @@ func renderLine(row []StyledRune, width int, terminalColorCount ColorCount) (str
 		}
 
 		builder.WriteRune(runeToWrite)
+	}
+
+	lastStyleMinusHyperlink := lastStyle.WithHyperlink(nil)
+	if lastStyleMinusHyperlink != lastStyle {
+		// Remove the hyperlink attribute
+		builder.WriteString(lastStyleMinusHyperlink.RenderUpdateFrom(lastStyle, terminalColorCount))
+		lastStyle = lastStyleMinusHyperlink
 	}
 
 	if len(row) < width {
@@ -830,7 +926,101 @@ func (screen *UnixScreen) ShowNLines(height int) {
 	screen.showNLines(width, height, false)
 }
 
+func createLastRenderedSnapshot(width int, height int, cells [][]StyledRune) lastRendered {
+	snapshotCells := make([][]StyledRune, height)
+	for row := 0; row < height; row++ {
+		snapshotCells[row] = make([]StyledRune, width)
+		copy(snapshotCells[row], cells[row][0:width])
+	}
+
+	return lastRendered{
+		width:  width,
+		height: height,
+		cells:  snapshotCells,
+	}
+}
+
+// Map updated lines
+func (screen *UnixScreen) findUpdatedLines() map[int][]StyledRune {
+	height := len(screen.cells)
+	updatedLines := make(map[int][]StyledRune, height)
+	for row := range height {
+		newLine := screen.cells[row]
+		cachedLine := screen.lastRendered.cells[row]
+
+		if len(newLine) != len(cachedLine) {
+			updatedLines[row] = newLine
+			continue
+		}
+
+		for col := range newLine {
+			if !newLine[col].Equal(cachedLine[col]) {
+				updatedLines[row] = newLine
+				break
+			}
+		}
+	}
+
+	return updatedLines
+}
+
+// Renders a single line and appends a newline if needed (except for last line)
+func renderWithNewline(builder *strings.Builder, line []StyledRune, width int, terminalColorCount ColorCount, isLastLine bool) {
+	rendered, lineLength := renderLine(line, width, terminalColorCount)
+	builder.WriteString(rendered)
+
+	// NOTE: This <= should *really* be <= and nothing else. Otherwise, if
+	// one line precisely as long as the terminal window goes before one
+	// empty line, the empty line will never be rendered.
+	//
+	// Can be demonstrated using "moor m/pager.go", scroll right once to
+	// make the line numbers go away, then make the window narrower until
+	// some line before an empty line is just as wide as the window.
+	//
+	// With the wrong comparison here, then the empty line just disappears.
+	if lineLength <= len(line) && !isLastLine {
+		builder.WriteString("\r\n")
+	}
+}
+
+// If only a few lines changed, update just those lines.
+//
+// Returns true if delta rendering was done, false if a full render is needed.
+func (screen *UnixScreen) showNLinesDelta(width int, height int) bool {
+	if screen.lastRendered.width != width || screen.lastRendered.height != height {
+		return false
+	}
+
+	// Map from line number to line contents
+	updatedLines := screen.findUpdatedLines()
+
+	// We have two spinners, those two should be able to spin without updating
+	// the whole screen.
+	if len(updatedLines) > 2 {
+		// Nah, do the full render
+		return false
+	}
+
+	var builder strings.Builder
+	for row, line := range updatedLines {
+		// Move cursor to the start of the line
+		builder.WriteString(fmt.Sprintf("\x1b[%d;1H", row+1))
+
+		renderWithNewline(&builder, line, width, screen.terminalColorCount, row == (height-1))
+	}
+
+	// Write out what we have
+	screen.write(builder.String())
+	screen.lastRendered = createLastRenderedSnapshot(width, height, screen.cells)
+
+	return true
+}
+
 func (screen *UnixScreen) showNLines(width int, height int, clearFirst bool) {
+	if clearFirst && screen.showNLinesDelta(width, height) {
+		return
+	}
+
 	var builder strings.Builder
 
 	if clearFirst {
@@ -839,26 +1029,11 @@ func (screen *UnixScreen) showNLines(width int, height int, clearFirst bool) {
 		builder.WriteString("\x1b[1;1H")
 	}
 
-	for row := 0; row < height; row++ {
-		rendered, lineLength := renderLine(screen.cells[row], width, screen.terminalColorCount)
-		builder.WriteString(rendered)
-
-		wasLastLine := row == (height - 1)
-
-		// NOTE: This <= should *really* be <= and nothing else. Otherwise, if
-		// one line precisely as long as the terminal window goes before one
-		// empty line, the empty line will never be rendered.
-		//
-		// Can be demonstrated using "moar m/pager.go", scroll right once to
-		// make the line numbers go away, then make the window narrower until
-		// some line before an empty line is just as wide as the window.
-		//
-		// With the wrong comparison here, then the empty line just disappears.
-		if lineLength <= len(screen.cells[row]) && !wasLastLine {
-			builder.WriteString("\r\n")
-		}
+	for row := range height {
+		renderWithNewline(&builder, screen.cells[row], width, screen.terminalColorCount, row == (height-1))
 	}
 
 	// Write out what we have
 	screen.write(builder.String())
+	screen.lastRendered = createLastRenderedSnapshot(width, height, screen.cells)
 }

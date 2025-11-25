@@ -1,4 +1,3 @@
-// Package twin provides Terminal Window interaction
 package twin
 
 // Used for testing.
@@ -83,6 +82,10 @@ func (screen *FakeScreen) Size() (width int, height int) {
 
 func (screen *FakeScreen) RequestTerminalBackgroundColor() {
 	// This method intentionally left blank
+}
+
+func (screen *FakeScreen) TerminalBackground() *Color {
+	return nil
 }
 
 func (screen *FakeScreen) ShowCursorAt(_ int, _ int) {

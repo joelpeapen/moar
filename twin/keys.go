@@ -56,7 +56,7 @@ var escapeSequenceToKeyCode = map[string]KeyCode{
 	"\x1b[C": KeyRight,
 	"\x1b[D": KeyLeft,
 
-	// Ref: https://github.com/walles/moar/issues/138#issuecomment-1579199274
+	// Ref: https://github.com/walles/moor/issues/138#issuecomment-1579199274
 	"\x1bOA": KeyUp,
 	"\x1bOB": KeyDown,
 	"\x1bOC": KeyRight,
@@ -65,10 +65,11 @@ var escapeSequenceToKeyCode = map[string]KeyCode{
 	"\x1bl": RuneKeyAltRight, // Alt + l
 	"\x1bh": RuneKeyAltLeft,  // Alt + h
 
-	"\x1b[1;3A": KeyAltUp,    // Alt + up arrow
-	"\x1b[1;3B": KeyAltDown,  // Alt + down arrow
-	"\x1b[1;3C": KeyAltRight, // Alt + right arrow
-	"\x1b[1;3D": KeyAltLeft,  // Alt + left arrow
+	// macBook option-arrows
+	"\x1b[1;3A": KeyAltUp,
+	"\x1b[1;3B": KeyAltDown,
+	"\x1b[1;3C": KeyAltRight,
+	"\x1b[1;3D": KeyAltLeft,
 
 	"\x1b[H":  KeyHome,
 	"\x1b[F":  KeyEnd,

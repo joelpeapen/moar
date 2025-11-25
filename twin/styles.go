@@ -31,11 +31,37 @@ type Style struct {
 	//
 	// Ref:
 	// * https://gist.github.com/egmontkob/eb114294efbcd5adb1944c9f3cb5feda
-	// * https://github.com/walles/moar/issues/131
+	// * https://github.com/walles/moor/issues/131
 	hyperlinkURL *string
 }
 
 var StyleDefault Style
+
+func (style Style) Equal(other Style) bool {
+	if style.fg != other.fg {
+		return false
+	}
+	if style.bg != other.bg {
+		return false
+	}
+	if style.underlineColor != other.underlineColor {
+		return false
+	}
+	if style.attrs != other.attrs {
+		return false
+	}
+
+	// Now only the hyperlink is left to compare
+	if style.hyperlinkURL == nil && other.hyperlinkURL == nil {
+		return true
+	}
+	if style.hyperlinkURL != nil && other.hyperlinkURL != nil {
+		return *style.hyperlinkURL == *other.hyperlinkURL
+	}
+
+	// Hyperlinks have different nil-ness
+	return false
+}
 
 func (style Style) String() string {
 	undelineSuffix := ""
@@ -96,6 +122,10 @@ func (style Style) WithAttr(attr AttrMask) Style {
 	return result
 }
 
+func (style Style) HasAttr(attr AttrMask) bool {
+	return style.attrs.has(attr)
+}
+
 // Call with nil to remove the link
 func (style Style) WithHyperlink(hyperlinkURL *string) Style {
 	if hyperlinkURL != nil && *hyperlinkURL == "" {
@@ -110,6 +140,23 @@ func (style Style) WithHyperlink(hyperlinkURL *string) Style {
 		attrs:          style.attrs,
 		hyperlinkURL:   hyperlinkURL,
 	}
+}
+
+// HyperlinkURL returns the hyperlink URL if set, or nil otherwise.
+func (style Style) HyperlinkURL() *string {
+	if style.hyperlinkURL == nil || *style.hyperlinkURL == "" {
+		return nil
+	}
+
+	return style.hyperlinkURL
+}
+
+func (style Style) Foreground() Color {
+	return style.fg
+}
+
+func (style Style) Background() Color {
+	return style.bg
 }
 
 func (style Style) WithoutAttr(attr AttrMask) Style {

@@ -136,6 +136,7 @@ Moving around
 * > / 'G' to go to the end of the document
 * 'h', 'l' for left and right (as in vim)
 * Half page 'u'p / 'd'own, or CTRL-u / CTRL-d
+* CTRL-a moves to the leftmost position
 * RETURN moves down one line
 
 Searching
@@ -178,7 +179,7 @@ func NewPager(r *Reader) *Pager {
 		ShowLineNumbers:  true,
 		ShowStatusBar:    true,
 		DeInit:           true,
-		SideScrollAmount: 1,
+		SideScrollAmount: 16,
 		ScrollLeftHint:   twin.NewStyledRune('<', twin.StyleDefault.WithAttr(twin.AttrReverse)),
 		ScrollRightHint:  twin.NewStyledRune('>', twin.StyleDefault.WithAttr(twin.AttrReverse)),
 		scrollPosition:   newScrollPosition(name),
