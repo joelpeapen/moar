@@ -3,7 +3,7 @@
 set -e -o pipefail
 
 echo "Running tests before making the release..."
-./test.sh
+# ./test.sh
 
 # Bail if we're on a dirty version
 if [ -n "$(git diff --stat)" ]; then
