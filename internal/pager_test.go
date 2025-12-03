@@ -96,7 +96,7 @@ func TestBrokenUtf8(t *testing.T) {
 }
 
 func startPaging(t *testing.T, reader *reader.ReaderImpl) *twin.FakeScreen {
-	// 0 means default tab size. Defaults to 8 to be like less.
+	// 0 means default tab size. Defaults to 4
 	return startPagingWithTabSize(t, 0, reader)
 }
 
@@ -191,8 +191,8 @@ func TestTabHandling(t *testing.T) {
 	assertIndexOfFirstX(t, 4, "\x09Johan\x09x", 12)
 }
 
-func TestTabHandling_TabSize8(t *testing.T) {
-	assertIndexOfFirstX(t, 8, "\x09x", 8)
+func TestTabHandling_TabSize4(t *testing.T) {
+	assertIndexOfFirstX(t, 4, "\x09x", 4)
 }
 
 func TestCodeHighlighting(t *testing.T) {

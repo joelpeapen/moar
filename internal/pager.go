@@ -233,7 +233,7 @@ func NewPager(readers ...*reader.ReaderImpl) *Pager {
 		ShowStatusBar:               true,
 		DeInit:                      true,
 		SideScrollAmount:            16,
-		TabSize:                     8, // This is what less defaults to
+		TabSize:                     4,
 		ScrollLeftHint:              textstyles.CellWithMetadata{Rune: '<', Style: twin.StyleDefault.WithAttr(twin.AttrReverse)},
 		ScrollRightHint:             textstyles.CellWithMetadata{Rune: '>', Style: twin.StyleDefault.WithAttr(twin.AttrReverse)},
 		scrollPosition:              newScrollPosition(name),

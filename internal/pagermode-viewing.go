@@ -246,12 +246,12 @@ func (m PagerModeViewing) onRune(char rune) {
 
 func (p *Pager) cycleTabSize() {
 	switch p.TabSize {
-	case 8:
-		p.TabSize = 4
+	case 4:
+		p.TabSize = 8
 	default:
 		// We really want to toggle betwewen 4 and 8, but if we start out
 		// somewhere else let's just go for 8. That's less' default tab size.
-		p.TabSize = 8
+		p.TabSize = 4
 	}
 	textstyles.TabSize = p.TabSize
 

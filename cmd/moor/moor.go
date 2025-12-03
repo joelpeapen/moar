@@ -429,7 +429,7 @@ func pagerFromArgs(
 		textstyles.CellWithMetadata{Rune: '>', Style: twin.StyleDefault.WithAttr(twin.AttrReverse)},
 		"Shown when view can scroll right. One character with optional ANSI highlighting.", parseScrollHint)
 	shift := flagSetFunc(flagSet, "shift", 1, "Horizontal scroll defaults to 1", parseShiftAmount)
-	tabSize := flagSetFunc(flagSet, "tab-size", 8, "Number of spaces per tab stop, defaults to 8", parseTabAmount)
+	tabSize := flagSetFunc(flagSet, "tab-size", 4, "Number of spaces per tab stop, defaults to 4", parseTabAmount)
 	mouseMode := flagSetFunc(
 		flagSet,
 		"mousemode",
