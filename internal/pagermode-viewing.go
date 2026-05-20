@@ -4,6 +4,8 @@ import (
 	"fmt"
 
 	log "github.com/sirupsen/logrus"
+	"github.com/walles/moor/v2/internal/linemetadata"
+	"github.com/walles/moor/v2/internal/search"
 	"github.com/walles/moor/v2/internal/textstyles"
 	"github.com/walles/moor/v2/twin"
 )
@@ -12,7 +14,7 @@ type PagerModeViewing struct {
 	pager *Pager
 }
 
-func (m PagerModeViewing) drawFooter(statusText string, spinner string) {
+func (m PagerModeViewing) drawFooter(filenameText string, statusText string, spinner string) {
 	prefix := ""
 	colonHelp := ""
 	m.pager.readerLock.Lock()
@@ -23,7 +25,7 @@ func (m PagerModeViewing) drawFooter(statusText string, spinner string) {
 	m.pager.readerLock.Unlock()
 
 	searchHelp := "'/' to search"
-	if len(m.pager.searchString) > 0 {
+	if !m.pager.search.Inactive() {
 		searchHelp = "'n'/'p' to search next/previous"
 	}
 	helpText := "Press 'ESC' / 'q' to exit, " + colonHelp + searchHelp + ", '&' to filter, 'f1' for help"
@@ -37,7 +39,7 @@ func (m PagerModeViewing) drawFooter(statusText string, spinner string) {
 		if len(spinner) > 0 {
 			spinner = "  " + spinner
 		}
-		m.pager.setFooter(prefix+statusText+spinner, helpText)
+		m.pager.setFooter(prefix, filenameText, statusText+spinner, helpText)
 	}
 }
 
@@ -118,6 +120,9 @@ func (m PagerModeViewing) onRune(char rune) {
 	case 'q':
 		p.Quit()
 
+	case 'r':
+		p.ReloadCurrentReader()
+
 	case 'v':
 		handleEditingRequest(p)
 
@@ -151,11 +156,15 @@ func (m PagerModeViewing) onRune(char rune) {
 	case '>', 'G':
 		p.scrollToEnd()
 
-	case 'f', ' ':
+	// '\x06' = CTRL-f, should work like just 'f'.
+	// Ref: https://github.com/walles/moor/issues/107
+	case 'f', ' ', '\x06':
 		p.scrollPosition = p.scrollPosition.NextLine(p.visibleHeight())
 		p.handleScrolledDown()
 
-	case 'b':
+	// '\x02' = CTRL-b, should work like just 'b'.
+	// Ref: https://github.com/walles/moor/issues/107
+	case 'b', '\x02':
 		p.scrollPosition = p.scrollPosition.PreviousLine(p.visibleHeight())
 		p.handleScrolledUp()
 
@@ -173,24 +182,27 @@ func (m PagerModeViewing) onRune(char rune) {
 
 	case '/':
 		p.mode = NewPagerModeSearch(p, SearchDirectionForward, p.scrollPosition)
-		p.setTargetLine(nil)
-		p.searchString = ""
-		p.searchPattern = nil
+		p.search.Clear()
+
+		// Searchers want to scan the whole file, start reading as much as we can
+		reallyHigh := linemetadata.IndexMax()
+		p.setTargetLine(&reallyHigh)
 
 	case '?':
 		p.mode = NewPagerModeSearch(p, SearchDirectionBackward, p.scrollPosition)
-		p.setTargetLine(nil)
-		p.searchString = ""
-		p.searchPattern = nil
+		p.search.Clear()
+
+		// Searchers want to scan the whole file, start reading as much as we can
+		reallyHigh := linemetadata.IndexMax()
+		p.setTargetLine(&reallyHigh)
 
 	case '&':
 		if !p.isShowingHelp {
 			// Filtering the help text is not supported. Feel free to work on
 			// that if you feel that's time well spent.
 			p.mode = NewPagerModeFilter(p)
-			p.searchString = ""
-			p.searchPattern = nil
-			p.filterPattern = nil
+			p.search.Clear()
+			p.filter = search.Search{}
 		}
 
 	case 'g':

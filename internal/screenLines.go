@@ -18,7 +18,7 @@ type renderedLine struct {
 
 	// If an input line has been wrapped into two, the part on the second line
 	// will have a wrapIndex of 1.
-	wrapIndex int
+	wrapIndex linemetadata.ScreenLines
 
 	containsSearchHit bool
 
@@ -35,6 +35,7 @@ type renderedScreen struct {
 	lines             []renderedLine
 	inputLines        []reader.NumberedLine
 	numberPrefixWidth int // Including padding. 0 means no line numbers.
+	filenameText      string
 	statusText        string
 }
 
@@ -62,13 +63,13 @@ func (p *Pager) redraw(spinner string) {
 		// This happens when we're done
 		eofSpinner = "---"
 	}
-	spinnerLine := textstyles.StyledRunesFromString(statusbarStyle, eofSpinner, nil).StyledRunes
+	spinnerLine := textstyles.StyledRunesFromString(statusbarStyle, eofSpinner, nil, 0).StyledRunes
 	column := 0
 	for _, cell := range spinnerLine {
 		column += p.screen.SetCell(column, lastUpdatedScreenLineNumber+1, cell.ToStyledRune())
 	}
 
-	p.mode.drawFooter(renderedScreen.statusText, spinner)
+	p.mode.drawFooter(renderedScreen.filenameText, renderedScreen.statusText, spinner)
 
 	p.screen.Show()
 }
@@ -109,14 +110,17 @@ func (p *Pager) internalRenderLines(highlightSearchHitLines bool) renderedScreen
 	if p.lineIndex() != nil {
 		lineIndexToShow = *p.lineIndex()
 	}
-	inputLines := p.Reader().GetLines(lineIndexToShow, p.visibleHeight())
+	inputLines := p.Reader().GetLines(lineIndexToShow, int(p.visibleHeight()))
 	if len(inputLines.Lines) == 0 {
 		// Empty input, empty output
-		return renderedScreen{statusText: inputLines.StatusText}
+		return renderedScreen{filenameText: inputLines.FilenameText, statusText: inputLines.StatusText}
 	}
 
-	lastVisibleLineNumber := inputLines.Lines[len(inputLines.Lines)-1].Number
-	numberPrefixLength := p.getLineNumberPrefixLength(lastVisibleLineNumber)
+	// We must use the exact same max number prefix length as the scroll engine
+	// used to calculate its viewport. If the engine used an approximation, we
+	// must use the exact same approximation, otherwise the number of line wraps
+	// might disagree, causing panics (Issue #399).
+	numberPrefixLength := p.scrollPosition.getMaxNumberPrefixLength(p)
 
 	allLines := make([]renderedLine, 0)
 	for _, line := range inputLines.Lines {
@@ -175,7 +179,7 @@ func (p *Pager) internalRenderLines(highlightSearchHitLines bool) renderedScreen
 	allLines = allLines[firstVisibleIndex:]
 
 	// Drop the lines that would have gone below the screen
-	wantedLineCount := p.visibleHeight()
+	wantedLineCount := int(p.visibleHeight())
 	if len(allLines) > wantedLineCount {
 		allLines = allLines[0:wantedLineCount]
 	}
@@ -195,6 +199,7 @@ func (p *Pager) internalRenderLines(highlightSearchHitLines bool) renderedScreen
 
 	return renderedScreen{
 		lines:             allLines,
+		filenameText:      inputLines.FilenameText,
 		statusText:        inputLines.StatusText,
 		inputLines:        inputLines.Lines,
 		numberPrefixWidth: numberPrefixLength,
@@ -209,12 +214,22 @@ func (p *Pager) internalRenderLines(highlightSearchHitLines bool) renderedScreen
 // lineNumber and numberPrefixLength are required for knowing how much to
 // indent, and to (optionally) render the line number.
 func (p *Pager) renderLine(line reader.NumberedLine, numberPrefixLength int, highlightSearchHitLines bool) []renderedLine {
-	highlighted := line.HighlightedTokens(plainTextStyle, searchHitStyle, p.searchPattern)
+	width, _ := p.screen.Size()
 	var wrapped []textstyles.StyledRunesWithTrailer
+	var highlighted textstyles.StyledRunesWithTrailer
 	if p.WrapLongLines {
-		width, _ := p.screen.Size()
+		highlighted = line.HighlightedTokens(plainTextStyle, searchHitStyle, p.search, 0)
+
 		wrapped = wrapLine(width-numberPrefixLength, highlighted.StyledRunes)
 	} else {
+		// Request only screen width tokens plus whatever is needed on the left
+		// due to horizontal scrolling. Also, get one extra to the right so we
+		// can know whether to show overflow markers.
+		//
+		// This is a huge performance gain when dealing with files with
+		// extremeny long lines: https://github.com/walles/moor/issues/358
+		highlighted = line.HighlightedTokens(plainTextStyle, searchHitStyle, p.search, width+p.leftColumnZeroBased+1)
+
 		// All on one line
 		wrapped = []textstyles.StyledRunesWithTrailer{{
 			StyledRunes:       highlighted.StyledRunes,
@@ -249,7 +264,7 @@ func (p *Pager) renderLine(line reader.NumberedLine, numberPrefixLength int, hig
 
 		rendered = append(rendered, renderedLine{
 			inputLineIndex:    line.Index,
-			wrapIndex:         wrapIndex,
+			wrapIndex:         linemetadata.ScreenLines(wrapIndex),
 			cells:             decorated,
 			containsSearchHit: subLine.ContainsSearchHit,
 			trailer:           subLine.Trailer,

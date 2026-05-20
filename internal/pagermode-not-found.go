@@ -6,8 +6,8 @@ type PagerModeNotFound struct {
 	pager *Pager
 }
 
-func (m PagerModeNotFound) drawFooter(_ string, _ string) {
-	m.pager.setFooter("Not found: "+m.pager.searchString, "")
+func (m PagerModeNotFound) drawFooter(_ string, _ string, _ string) {
+	m.pager.setFooter("Not found: "+m.pager.search.String(), "", "", "")
 }
 
 func (m PagerModeNotFound) onKey(key twin.KeyCode) {

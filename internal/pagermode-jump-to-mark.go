@@ -11,10 +11,11 @@ type PagerModeJumpToMark struct {
 	pager *Pager
 }
 
-func (m PagerModeJumpToMark) drawFooter(_ string, _ string) {
+func (m PagerModeJumpToMark) drawFooter(_ string, _ string, _ string) {
 	p := m.pager
 
-	_, height := p.screen.Size()
+	_, screenHeight := p.ScreenSize()
+	height := int(screenHeight)
 
 	pos := 0
 	for _, token := range m.getMarkPrompt() {

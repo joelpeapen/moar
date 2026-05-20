@@ -1,10 +1,9 @@
 package reader
 
 import (
-	"regexp"
-
 	"github.com/rivo/uniseg"
 	"github.com/walles/moor/v2/internal/linemetadata"
+	"github.com/walles/moor/v2/internal/search"
 	"github.com/walles/moor/v2/internal/textstyles"
 	"github.com/walles/moor/v2/twin"
 )
@@ -16,11 +15,13 @@ type NumberedLine struct {
 }
 
 func (nl *NumberedLine) Plain() string {
-	return nl.Line.Plain()
+	return nl.Line.Plain(nl.Index)
 }
 
-func (nl *NumberedLine) HighlightedTokens(plainTextStyle twin.Style, searchHitStyle twin.Style, search *regexp.Regexp) textstyles.StyledRunesWithTrailer {
-	return nl.Line.HighlightedTokens(plainTextStyle, searchHitStyle, search, &nl.Index)
+// maxTokensCount: at most this many tokens will be included in the result. If
+// 0, do all runes. For BenchmarkRenderHugeLine() performance.
+func (nl *NumberedLine) HighlightedTokens(plainTextStyle twin.Style, searchHitStyle twin.Style, search search.Search, maxTokensCount int) textstyles.StyledRunesWithTrailer {
+	return nl.Line.HighlightedTokens(plainTextStyle, searchHitStyle, search, nl.Index, maxTokensCount)
 }
 
 func (nl *NumberedLine) DisplayWidth() int {

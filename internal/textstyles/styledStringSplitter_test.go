@@ -30,7 +30,7 @@ func TestNextCharLastChar_empty(t *testing.T) {
 
 func collectStyledStrings(s string) ([]_StyledString, twin.Style) {
 	styledStrings := []_StyledString{}
-	trailer := styledStringsFromString(twin.StyleDefault, s, nil, func(str string, style twin.Style) {
+	trailer := styledStringsFromString(twin.StyleDefault, s, nil, 0, func(str string, style twin.Style) {
 		styledStrings = append(styledStrings, _StyledString{str, style})
 	})
 	return styledStrings, trailer
@@ -106,10 +106,38 @@ func TestURLWithSpace(t *testing.T) {
 	assert.Assert(t, strings.Contains(styledStrings[0].Style.String(), "file://"+urlPath))
 }
 
+// Test handling of URLs with multiple parameters in OSC 8 sequences.
+// Parameters are separated by colons in the format: id=value:key=value
+//
+// Ref: https://github.com/walles/moor/issues/403
+func TestURLWithMultipleParameters(t *testing.T) {
+	url := "http://example.com"
+	text := "Link with parameters"
+	styledStrings, trailer := collectStyledStrings("\x1b]8;id=link456:custom=value;" + url + "\x1b\\" + text + "\x1b]8;;\x1b\\")
+	assert.Equal(t, twin.StyleDefault, trailer)
+	assert.Equal(t, 1, len(styledStrings))
+	assert.Equal(t, text, styledStrings[0].String)
+	assert.Assert(t, strings.Contains(styledStrings[0].Style.String(), url))
+}
+
+// Test handling of URLs with empty id parameter in OSC 8 sequences.
+// Empty parameters should not cause issues.
+//
+// Ref: https://github.com/walles/moor/issues/403
+func TestURLWithEmptyID(t *testing.T) {
+	url := "http://example.com"
+	text := "Link with empty id"
+	styledStrings, trailer := collectStyledStrings("\x1b]8;id=;" + url + "\x1b\\" + text + "\x1b]8;;\x1b\\")
+	assert.Equal(t, twin.StyleDefault, trailer)
+	assert.Equal(t, 1, len(styledStrings))
+	assert.Equal(t, text, styledStrings[0].String)
+	assert.Assert(t, strings.Contains(styledStrings[0].Style.String(), url))
+}
+
 func TestPlainTextColor(t *testing.T) {
 	plainTextStyle := twin.StyleDefault.WithAttr(twin.AttrReverse)
 	styledStrings := []_StyledString{}
-	trailer := styledStringsFromString(plainTextStyle, "a\x1b[33mb\x1b[mc", nil, func(str string, style twin.Style) {
+	trailer := styledStringsFromString(plainTextStyle, "a\x1b[33mb\x1b[mc", nil, 0, func(str string, style twin.Style) {
 		styledStrings = append(styledStrings, _StyledString{str, style})
 	})
 

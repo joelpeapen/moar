@@ -1,37 +1,43 @@
 package reader
 
 import (
-	"regexp"
+	"sync/atomic"
 
 	"github.com/walles/moor/v2/internal/linemetadata"
+	"github.com/walles/moor/v2/internal/search"
 	"github.com/walles/moor/v2/internal/textstyles"
 	"github.com/walles/moor/v2/twin"
 )
 
-// A Line represents a line of text that can / will be paged
 type Line struct {
-	raw   string
-	plain *string // This will be populated by the reader's Get methods if not set
-}
-
-// NewLine creates a new Line from a (potentially ANSI / man page formatted) string
-func NewLine(raw string) Line {
-	return Line{
-		raw: raw,
-	}
+	raw            []byte
+	plainTextCache atomic.Pointer[string] // Use line.Plain() to access this field
 }
 
 // Returns a representation of the string split into styled tokens. Any regexp
 // matches are highlighted. A nil regexp means no highlighting.
+//
+// maxTokensCount: at most this many tokens will be included in the result. If
+// 0, do all runes. For BenchmarkRenderHugeLine() performance.
 func (line *Line) HighlightedTokens(
 	plainTextStyle twin.Style,
 	searchHitStyle twin.Style,
-	search *regexp.Regexp,
-	lineIndex *linemetadata.Index,
+	activeSearch search.Search,
+	lineIndex linemetadata.Index,
+	maxTokensCount int,
 ) textstyles.StyledRunesWithTrailer {
-	matchRanges := getMatchRanges(line.plain, search)
+	var matchRanges *search.MatchRanges
+	if activeSearch.Active() {
+		// Only look for matches if there is an active search, since if a line
+		// is 250M characters long, line.Plain() can be slow.
+		//
+		// This makes the UI responsive when showing a huge line.
+		plain := line.Plain(lineIndex)
 
-	fromString := textstyles.StyledRunesFromString(plainTextStyle, line.raw, lineIndex)
+		matchRanges = activeSearch.GetMatchRanges(plain)
+	}
+
+	fromString := textstyles.StyledRunesFromString(plainTextStyle, string(line.raw), &lineIndex, maxTokensCount)
 	returnRunes := make([]textstyles.CellWithMetadata, 0, len(fromString.StyledRunes))
 	lastWasSearchHit := false
 	for _, token := range fromString.StyledRunes {
@@ -58,11 +64,27 @@ func (line *Line) HighlightedTokens(
 	}
 }
 
-// Plain returns a plain text representation of the initial string
-func (line *Line) Plain() string {
-	return *line.plain
+func (line *Line) HasManPageFormatting() bool {
+	return textstyles.HasManPageFormatting(string(line.raw))
 }
 
-func (line *Line) HasManPageFormatting() bool {
-	return textstyles.HasManPageFormatting(line.raw)
+// The index is for error reporting. Set DisablePlainCachingForBenchmarking to
+// false to simulate a cache miss for benchmarking.
+func (line *Line) Plain(index linemetadata.Index) string {
+	fromCache := line.plainTextCache.Load()
+	if DisablePlainCachingForBenchmarking {
+		// Simulate a cache miss for benchmarking
+		fromCache = nil
+	}
+	if fromCache != nil {
+		return *fromCache
+	}
+
+	plain := textstyles.StripFormatting(string(line.raw), index)
+
+	// If this succeeds, all good. If it fails it means some other goroutine
+	// populated the cache before us, which is also fine.
+	_ = line.plainTextCache.CompareAndSwap(nil, &plain)
+
+	return plain
 }

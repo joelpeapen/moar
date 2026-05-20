@@ -1,7 +1,6 @@
 package internal
 
 import (
-	"regexp"
 	"strconv"
 	"strings"
 	"testing"
@@ -9,9 +8,12 @@ import (
 	"github.com/google/go-cmp/cmp"
 	"github.com/walles/moor/v2/internal/linemetadata"
 	"github.com/walles/moor/v2/internal/reader"
+	"github.com/walles/moor/v2/internal/search"
 	"github.com/walles/moor/v2/internal/textstyles"
 	"github.com/walles/moor/v2/twin"
 	"gotest.tools/v3/assert"
+
+	log "github.com/sirupsen/logrus"
 )
 
 // NOTE: You can find related tests in pager_test.go.
@@ -27,7 +29,12 @@ func renderedToString(row []textstyles.CellWithMetadata) string {
 }
 
 func testHorizontalCropping(t *testing.T, contents string, firstVisibleColumn int, lastVisibleColumn int, expected string) {
-	pager := NewPager(nil)
+	log.SetLevel(log.WarnLevel) // Stop info logs from polluting benchmark output
+
+	reader := reader.NewFromTextForTesting("testHorizontalCropping", contents)
+	assert.NilError(t, reader.Wait())
+
+	pager := NewPager(reader)
 	pager.ShowLineNumbers = false
 	pager.showLineNumbers = false
 
@@ -35,11 +42,10 @@ func testHorizontalCropping(t *testing.T, contents string, firstVisibleColumn in
 	pager.leftColumnZeroBased = firstVisibleColumn
 	pager.scrollPosition = newScrollPosition("testHorizontalCropping")
 
-	lineContents := reader.NewLine(contents)
-	numberedLine := reader.NumberedLine{
-		Line: &lineContents,
-	}
-	screenLine := pager.renderLine(numberedLine, pager.getLineNumberPrefixLength(numberedLine.Number), true)
+	numberedLine := reader.GetLine(linemetadata.IndexFromZeroBased(0))
+	assert.Assert(t, numberedLine != nil)
+
+	screenLine := pager.renderLine(*numberedLine, pager.getLineNumberPrefixLength(numberedLine.Number), true)
 	assert.Equal(t, renderedToString(screenLine[0].cells), expected)
 }
 
@@ -98,12 +104,13 @@ func TestEmpty(t *testing.T) {
 	}
 	pager.filteringReader = FilteringReader{
 		BackingReader: pager.readers[pager.currentReader],
-		FilterPattern: &pager.filterPattern,
+		Filter:        &pager.filter,
 	}
 
 	rendered := pager.renderLines()
 	assert.Equal(t, len(rendered.lines), 0)
-	assert.Equal(t, "test: <empty>", rendered.statusText)
+	assert.Equal(t, "test", rendered.filenameText)
+	assert.Equal(t, ": <empty>", rendered.statusText)
 	assert.Assert(t, pager.lineIndex() == nil)
 }
 
@@ -111,8 +118,8 @@ func TestEmpty(t *testing.T) {
 func TestSearchHighlight(t *testing.T) {
 	numberedLine := reader.NewFromTextForTesting("TestSearchHighlight", "x\"\"x").GetLine(linemetadata.Index{})
 	pager := Pager{
-		screen:        twin.NewFakeScreen(100, 10),
-		searchPattern: regexp.MustCompile("\""),
+		screen: twin.NewFakeScreen(100, 10),
+		search: search.For("\""),
 	}
 
 	rendered := pager.renderLine(*numberedLine, pager.getLineNumberPrefixLength(numberedLine.Number), true)
@@ -136,6 +143,39 @@ func TestSearchHighlight(t *testing.T) {
 	)
 }
 
+// Make sure that a search hit spanning the screen edge gets highlighted
+func TestSearchHighlightTruncated(t *testing.T) {
+	// Row contents longer than the screen width
+	numberedLine := reader.NewFromTextForTesting("TestSearchHighlightTruncated", "1234abcdef").GetLine(linemetadata.Index{})
+	pager := Pager{
+		screen: twin.NewFakeScreen(6, 10),
+		search: search.For("abcde"),
+	}
+
+	rendered := pager.renderLine(*numberedLine, pager.getLineNumberPrefixLength(numberedLine.Number), true)
+
+	assert.Equal(t, len(rendered), 1) // No wrapping
+	row := rendered[0]
+
+	assert.Equal(t, len(row.cells), 6) // 1234a> (last being the scroll-right marker)
+
+	expected := []textstyles.CellWithMetadata{
+		{Rune: '1'},
+		{Rune: '2'},
+		{Rune: '3'},
+		{Rune: '4'},
+		{Rune: 'a', IsSearchHit: true, StartsSearchHit: true},
+		{Rune: pager.ScrollRightHint.Rune},
+	}
+
+	for i, actualCell := range row.cells {
+		expectedCell := expected[i]
+		if actualCell.Rune != expectedCell.Rune || actualCell.IsSearchHit != expectedCell.IsSearchHit || actualCell.StartsSearchHit != expectedCell.StartsSearchHit {
+			t.Fatalf("Cell %d mismatch, got\n%#v, want\n%#v", i, actualCell, expectedCell)
+		}
+	}
+}
+
 func TestOverflowDown(t *testing.T) {
 	pager := Pager{
 		screen: twin.NewFakeScreen(
@@ -151,15 +191,16 @@ func TestOverflowDown(t *testing.T) {
 	}
 	pager.filteringReader = FilteringReader{
 		BackingReader: pager.readers[pager.currentReader],
-		FilterPattern: &pager.filterPattern,
+		Filter:        &pager.filter,
 	}
 
 	rendered := pager.renderLines()
 	assert.Equal(t, len(rendered.lines), 1)
 	assert.Equal(t, "hej", renderedToString(rendered.lines[0].cells))
-	assert.Equal(t, "test: 1 line  100%", rendered.statusText)
+	assert.Equal(t, rendered.filenameText, "test")
+	assert.Equal(t, rendered.statusText, ": 1 line  100%")
 	assert.Assert(t, pager.lineIndex().IsZero())
-	assert.Equal(t, pager.deltaScreenLines(), 0)
+	assert.Equal(t, pager.deltaScreenLines(), linemetadata.ScreenLines(0))
 }
 
 func TestOverflowUp(t *testing.T) {
@@ -176,15 +217,16 @@ func TestOverflowUp(t *testing.T) {
 	}
 	pager.filteringReader = FilteringReader{
 		BackingReader: pager.readers[pager.currentReader],
-		FilterPattern: &pager.filterPattern,
+		Filter:        &pager.filter,
 	}
 
 	rendered := pager.renderLines()
 	assert.Equal(t, len(rendered.lines), 1)
 	assert.Equal(t, "hej", renderedToString(rendered.lines[0].cells))
-	assert.Equal(t, "test: 1 line  100%", rendered.statusText)
+	assert.Equal(t, rendered.filenameText, "test")
+	assert.Equal(t, rendered.statusText, ": 1 line  100%")
 	assert.Assert(t, pager.lineIndex().IsZero())
-	assert.Equal(t, pager.deltaScreenLines(), 0)
+	assert.Equal(t, pager.deltaScreenLines(), linemetadata.ScreenLines(0))
 }
 
 func TestWrapping(t *testing.T) {
@@ -246,7 +288,7 @@ func TestOneLineTerminal(t *testing.T) {
 	}
 	pager.filteringReader = FilteringReader{
 		BackingReader: pager.readers[pager.currentReader],
-		FilterPattern: &pager.filterPattern,
+		Filter:        &pager.filter,
 	}
 
 	rendered := pager.renderLines()
@@ -273,14 +315,14 @@ func TestShortenedInput(t *testing.T) {
 
 	pager.filteringReader = FilteringReader{
 		BackingReader: pager.readers[pager.currentReader],
-		FilterPattern: &pager.filterPattern,
+		Filter:        &pager.filter,
 	}
 
 	pager.scrollToEnd()
 	assert.Equal(t, pager.lineIndex().Index(), 991, "This should have been the effect of calling scrollToEnd()")
 
 	pager.mode = NewPagerModeFilter(&pager)
-	pager.filterPattern = regexp.MustCompile("first") // Match only the first line
+	pager.filter = search.For("first") // Match only the first line
 
 	rendered := pager.renderLines()
 	assert.Equal(t, len(rendered.lines), 1, "Should have rendered one line")
@@ -311,14 +353,14 @@ func TestShortenedInputManyLines(t *testing.T) {
 
 	pager.filteringReader = FilteringReader{
 		BackingReader: pager.readers[pager.currentReader],
-		FilterPattern: &pager.filterPattern,
+		Filter:        &pager.filter,
 	}
 
 	pager.scrollToEnd()
 	assert.Equal(t, pager.lineIndex().Index(), 991, "Should be at the last line before filtering")
 
 	pager.mode = NewPagerModeFilter(&pager)
-	pager.filterPattern = regexp.MustCompile(`^match`)
+	pager.filter = search.For(`^match`)
 
 	rendered := pager.renderLines()
 	assert.Equal(t, len(rendered.lines), 9, "Should have rendered 9 lines (10 minus one status bar)")
@@ -388,9 +430,9 @@ func testRenderLinesWithSearchHits(t *testing.T, input string, expectedBackgroun
 	}
 	pager.filteringReader = FilteringReader{
 		BackingReader: pager.readers[pager.currentReader],
-		FilterPattern: &pager.filterPattern,
+		Filter:        &pager.filter,
 	}
-	pager.searchPattern = regexp.MustCompile("xxx")
+	pager.search = search.For("xxx")
 	pager.ShowStatusBar = false
 	pager.mode = PagerModeViewing{&pager}
 	pager.showLineNumbers = false
@@ -416,8 +458,60 @@ func BenchmarkRenderLines(b *testing.B) {
 
 	pager.renderLines() // Warm up
 
-	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
+	for b.Loop() {
+		pager.renderLines()
+	}
+}
+
+// Inspired by https://github.com/walles/moor/issues/358
+func BenchmarkRenderHugeLine(b *testing.B) {
+	log.SetLevel(log.WarnLevel) // Stop info logs from polluting benchmark output
+
+	const megabytes = 5
+	builder := strings.Builder{}
+	for builder.Len() < megabytes*1024*1024 {
+		builder.WriteString("Romani ite domum. ")
+	}
+	b.SetBytes(int64(builder.Len()))
+
+	input := reader.NewFromTextForTesting(
+		"BenchmarkRenderHugeLine()",
+		builder.String())
+	pager := NewPager(input)
+	pager.screen = twin.NewFakeScreen(80, 25)
+
+	assert.NilError(b, input.Wait())
+
+	pager.renderLines() // Warm up
+
+	for b.Loop() {
+		pager.renderLines()
+	}
+}
+
+// See https://github.com/walles/moor/issues/412
+func BenchmarkRenderHugeLineWithSearch(b *testing.B) {
+	log.SetLevel(log.WarnLevel) // Stop info logs from polluting benchmark output
+
+	const megabytes = 5
+	builder := strings.Builder{}
+	for builder.Len() < megabytes*1024*1024 {
+		builder.WriteString("Romani ite domum. ")
+	}
+	b.SetBytes(int64(builder.Len()))
+
+	input := reader.NewFromTextForTesting(
+		"BenchmarkRenderHugeLineWithSearch()",
+		builder.String())
+	pager := NewPager(input)
+	pager.screen = twin.NewFakeScreen(80, 25)
+	pager.search = search.For("domum")
+
+	assert.NilError(b, input.Wait())
+
+	pager.renderLines() // Warm up
+
+	for b.Loop() {
 		pager.renderLines()
 	}
 }

@@ -7,7 +7,14 @@ import (
 	"github.com/walles/moor/v2/internal/util"
 )
 
-// This represents a line number in an input stream
+// This represents a line number in an input stream. If the input stream has
+// been filtered, line numbers may be non-consecutive.
+//
+// Example:
+// 1. Index 0, line number 1
+// 2. Index 1, line number 2
+// 3. Index 2, line number 4 (line number 3 was filtered out)
+// 4. Index 3, line number 5
 type Number struct {
 	number int
 }

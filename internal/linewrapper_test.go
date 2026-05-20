@@ -5,14 +5,14 @@ import (
 
 	"gotest.tools/v3/assert"
 
-	"github.com/walles/moor/v2/internal/reader"
 	"github.com/walles/moor/v2/internal/textstyles"
 	"github.com/walles/moor/v2/twin"
+
+	log "github.com/sirupsen/logrus"
 )
 
 func tokenize(input string) []textstyles.CellWithMetadata {
-	line := reader.NewLine(input)
-	return line.HighlightedTokens(twin.StyleDefault, twin.StyleDefault, nil, nil).StyledRunes
+	return textstyles.StyledRunesFromString(twin.StyleDefault, input, nil, 0).StyledRunes
 }
 
 func rowsToString(cellLines []textstyles.CellWithMetadataSlice) string {
@@ -149,6 +149,8 @@ func TestGetWrapCountWideChars(t *testing.T) {
 }
 
 func BenchmarkWrapLine(b *testing.B) {
+	log.SetLevel(log.WarnLevel) // Stop info logs from polluting benchmark output
+
 	words := "Here are some words of different lengths, some of which are very long, and some of which are short. "
 	lineLen := 60_000
 	line := ""

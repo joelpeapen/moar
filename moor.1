@@ -73,7 +73,6 @@ Hide line numbers on startup, press left arrow key to show
 \fB\-\-no\-reformat\fR
 No effect, exists for backwards compatibility. See --reformat.
 .TP
-.TP
 \fB\-\-no\-search\-line\-highlight\fR
 Do not highlight the background of lines with search hits. The search hits themselves are still highlighted though, even with this option.
 .TP
@@ -137,7 +136,7 @@ Print trace logs after exiting, more verbose than
 Wrap long lines, toggle with
 .B w
 .TP
-\fB\+\1234\fR
+\fB+1234\fR
 Immediately scroll to line
 .B 1234
 .SH FILES
@@ -146,6 +145,24 @@ Immediately scroll to line
 Moor will store your search history in this file. If $XDG_DATA_HOME is not set, the file will be
 stored in the default XDG location, usually \fB~/.local/share/moor/search_history\fR.
 .SH ENVIRONMENT
+.TP
+.B LESS_TERMCAP_*
+For backwards compatibility with less, moor reads all
+\fBLESS_TERMCAP_*\fR values.
+In these values, both actual escape characters and the word
+.B ESC
+in caps are interpreted as escape characters.
+In moor, styling should be done using the \fB\-\-style\fR option rather than using these environment variables.
+Example value: \fBESC[1m\fR.
+.TP
+.B LESS_TERMCAP_md
+Formatting used for man page bold text.
+.TP
+.B LESS_TERMCAP_us
+Formatting used for man page underlined text.
+.TP
+.B LESS_TERMCAP_so
+Formatting used for status bar and search hits.
 .TP
 .B LESSSECURE
 Setting this to "1" prevents moor from opening new files or launching external programs, as required by

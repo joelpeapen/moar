@@ -15,6 +15,7 @@ const (
 	AttrDim
 	AttrItalic
 	AttrStrikeThrough
+	AttrHidden
 	AttrNone AttrMask = 0 // Normal text
 )
 
@@ -90,6 +91,9 @@ func (style Style) String() string {
 	}
 	if style.attrs.has(AttrStrikeThrough) {
 		attrNames = append(attrNames, "strikethrough")
+	}
+	if style.attrs.has(AttrHidden) {
+		attrNames = append(attrNames, "hidden")
 	}
 	if style.hyperlinkURL != nil {
 		attrNames = append(attrNames, "\""+*style.hyperlinkURL+"\"")
@@ -288,6 +292,15 @@ func (style Style) RenderUpdateFrom(previous Style, terminalColorCount ColorCoun
 			builder.WriteString("\x1b[9m")
 		} else {
 			builder.WriteString("\x1b[29m")
+		}
+	}
+
+	// Handle AttrHidden changes
+	if style.attrs.has(AttrHidden) != previous.attrs.has(AttrHidden) {
+		if style.attrs.has(AttrHidden) {
+			builder.WriteString("\x1b[8m")
+		} else {
+			builder.WriteString("\x1b[28m")
 		}
 	}
 

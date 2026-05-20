@@ -3,13 +3,14 @@ package internal
 import (
 	"fmt"
 	"math"
-	"regexp"
+	"runtime"
 	"sync"
 	"time"
 
 	log "github.com/sirupsen/logrus"
 	"github.com/walles/moor/v2/internal/linemetadata"
 	"github.com/walles/moor/v2/internal/reader"
+	"github.com/walles/moor/v2/internal/search"
 )
 
 // Filters lines based on the search query from the pager.
@@ -17,9 +18,9 @@ import (
 type FilteringReader struct {
 	BackingReader reader.Reader
 
-	// This is a reference to a reference so that we can track changes to the
-	// original pattern, including if it is set to nil.
-	FilterPattern **regexp.Regexp
+	// This is a reference so that we can track changes to the original pattern,
+	// including if it is set to nil.
+	Filter *search.Search
 
 	// Protects filteredLinesCache, unfilteredLineCountWhenCaching, and
 	// filterPatternWhenCaching.
@@ -35,41 +36,84 @@ type FilteringReader struct {
 
 	// This is the pattern that was used when we cached the lines. If it
 	// doesn't match the current pattern, then our cache needs to be rebuilt.
-	filterPatternWhenCaching *regexp.Regexp
+	filterWhenCaching search.Search
 }
 
 // Please hold the lock when calling this method.
+//
+// This method requires f.Filter.Active() to be true on entry.
 func (f *FilteringReader) rebuildCache() {
+	filter := *f.Filter
+	if !filter.Active() {
+		panic("Rebuilding cache requires an active filter")
+	}
+
 	t0 := time.Now()
 
 	cache := make([]reader.NumberedLine, 0)
-	filterPattern := *f.FilterPattern
 
 	// Mark cache base conditions
 	f.unfilteredLineCountWhenCaching = f.BackingReader.GetLineCount()
-	f.filterPatternWhenCaching = filterPattern
+	f.filterWhenCaching = filter
 
 	// Repopulate the cache
-	allBaseLines := f.BackingReader.GetLines(linemetadata.Index{}, math.MaxInt)
 	resultIndex := 0
-	for _, line := range allBaseLines.Lines {
-		if filterPattern != nil && len(filterPattern.String()) > 0 && !filterPattern.MatchString(line.Line.Plain()) {
-			// We have a pattern but it doesn't match
-			continue
-		}
 
-		cache = append(cache, reader.NumberedLine{
-			Line:   line.Line,
-			Index:  linemetadata.IndexFromZeroBased(resultIndex),
-			Number: line.Number,
-		})
-		resultIndex++
+	numLines := f.BackingReader.GetLineCount()
+	if numLines == 0 {
+		f.filteredLinesCache = &cache
+		log.Debugf("Filtered out 0/0 lines in %s", time.Since(t0))
+		return
+	}
+
+	// This completely avoids mutex locks and race conditions during the concurrent phase, while also preserving order.
+	matches := make([]bool, numLines)
+
+	var wg sync.WaitGroup
+	numWorkers := min(runtime.GOMAXPROCS(0), numLines)
+
+	// chunk size for each goroutine
+	chunkSize := (numLines + numWorkers - 1) / numWorkers
+
+	// Concurrent Filtering Phase
+	for i := range numWorkers {
+		wg.Add(1)
+		go func(workerIndex int) {
+			defer wg.Done()
+
+			lineCache := searchLineCache{}
+
+			start := workerIndex * chunkSize
+			end := min(start+chunkSize, numLines)
+
+			for j := start; j < end; j++ {
+				line := lineCache.GetLine(f.BackingReader, linemetadata.IndexFromZeroBased(j), SearchDirectionForward)
+				matches[j] = filter.Matches(line.Line.Plain(line.Index))
+			}
+		}(i)
+	}
+
+	wg.Wait()
+	t1 := time.Now()
+
+	// Assemble sequentially to ensure resultIndex increments correctly
+	lineCache := searchLineCache{}
+	for i := range numLines {
+		if matches[i] {
+			line := lineCache.GetLine(f.BackingReader, linemetadata.IndexFromZeroBased(i), SearchDirectionForward)
+			cache = append(cache, reader.NumberedLine{
+				Line:   line.Line,
+				Index:  linemetadata.IndexFromZeroBased(resultIndex),
+				Number: line.Number,
+			})
+			resultIndex++
+		}
 	}
 
 	f.filteredLinesCache = &cache
 
-	log.Debugf("Filtered out %d/%d lines in %s",
-		len(allBaseLines.Lines)-len(cache), len(allBaseLines.Lines), time.Since(t0))
+	log.Debugf("Filtered out %d/%d lines in %s (used %d workers in %s)",
+		numLines-len(cache), numLines, time.Since(t0), numWorkers, t1.Sub(t0))
 }
 
 func (f *FilteringReader) getAllLines() []reader.NumberedLine {
@@ -86,15 +130,15 @@ func (f *FilteringReader) getAllLines() []reader.NumberedLine {
 		return *f.filteredLinesCache
 	}
 
-	var currentFilterPattern string
-	if *f.FilterPattern != nil {
-		currentFilterPattern = (*f.FilterPattern).String()
+	var currentFilterPattern search.Search
+	if (*f).Filter.Active() {
+		currentFilterPattern = *f.Filter
 	}
-	var cacheFilterPattern string
-	if f.filterPatternWhenCaching != nil {
-		cacheFilterPattern = f.filterPatternWhenCaching.String()
+	var cacheFilterPattern search.Search
+	if f.filterWhenCaching.Active() {
+		cacheFilterPattern = f.filterWhenCaching
 	}
-	if currentFilterPattern != cacheFilterPattern {
+	if !currentFilterPattern.Equals(cacheFilterPattern) {
 		f.rebuildCache()
 		return *f.filteredLinesCache
 	}
@@ -106,7 +150,7 @@ func (f *FilteringReader) shouldPassThrough() bool {
 	f.lock.Lock()
 	defer f.lock.Unlock()
 
-	if *f.FilterPattern == nil || len((*f.FilterPattern).String()) == 0 {
+	if f.Filter == nil || f.Filter.Inactive() {
 		// Cache is not needed
 		f.filteredLinesCache = nil
 
@@ -174,6 +218,16 @@ func (f *FilteringReader) GetLines(firstLine linemetadata.Index, wantedLineCount
 	}
 }
 
+func (f *FilteringReader) GetLinesPreallocated(firstLine linemetadata.Index, resultLines *[]reader.NumberedLine) (string, string) {
+	if f.shouldPassThrough() {
+		return f.BackingReader.GetLinesPreallocated(firstLine, resultLines)
+	}
+
+	lines := f.GetLines(firstLine, cap(*resultLines))
+	*resultLines = lines.Lines
+	return lines.FilenameText, lines.StatusText
+}
+
 // In the general case, this will return a text like this:
 // "Filtered: 1234/5678 lines  22%"
 func (f *FilteringReader) createStatus(lastLine *linemetadata.Index) string {
@@ -221,5 +275,5 @@ func (f *FilteringReader) SetBackingReader(r reader.Reader) {
 	// Invalidate caches so they will be rebuilt lazily on next access.
 	f.filteredLinesCache = nil
 	f.unfilteredLineCountWhenCaching = -1
-	f.filterPatternWhenCaching = nil
+	f.filterWhenCaching = search.Search{}
 }

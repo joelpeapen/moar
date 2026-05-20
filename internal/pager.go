@@ -3,7 +3,6 @@ package internal
 import (
 	"fmt"
 	"math"
-	"regexp"
 	"runtime/debug"
 	"sync"
 	"time"
@@ -12,6 +11,7 @@ import (
 	log "github.com/sirupsen/logrus"
 	"github.com/walles/moor/v2/internal/linemetadata"
 	"github.com/walles/moor/v2/internal/reader"
+	"github.com/walles/moor/v2/internal/search"
 	"github.com/walles/moor/v2/internal/textstyles"
 	"github.com/walles/moor/v2/twin"
 )
@@ -19,7 +19,7 @@ import (
 type PagerMode interface {
 	onKey(key twin.KeyCode)
 	onRune(char rune)
-	drawFooter(statusText string, spinner string)
+	drawFooter(filenameText string, statusText string, spinner string)
 }
 
 type StatusBarOption int
@@ -37,6 +37,8 @@ type eventSpinnerUpdate struct {
 	spinner string
 }
 
+// Or we switched readers. Or something else happened that requires us to
+// recheck our reader.
 type eventMoreLinesAvailable struct{}
 
 // Either reading, highlighting or both are done. Check reader.Done() and
@@ -54,9 +56,12 @@ type Pager struct {
 	// A view of the current reader, possibly filtered
 	filteringReader FilteringReader
 
-	screen              twin.Screen
-	quit                bool
-	scrollPosition      scrollPosition
+	screen         twin.Screen
+	quit           bool
+	scrollPosition scrollPosition
+
+	// How far right we have scrolled horizontally. The unit is visual screen
+	// cells (or columns), so a double-width character counts as 2.
 	leftColumnZeroBased int
 
 	// Maybe this should be renamed to "controller"? Because it controls the UI?
@@ -64,16 +69,15 @@ type Pager struct {
 	// mode is better?
 	mode PagerMode
 
-	searchString  string
-	searchPattern *regexp.Regexp
+	search search.Search
 
 	// This should never be null while paging. Configured in NewPager().
 	searchHistory *SearchHistory
 
-	filterPattern *regexp.Regexp
+	filter search.Search
 
 	// We used to have a "Following" field here. If you want to follow, set
-	// TargetLineNumber to LineNumberMax() instead, see below.
+	// TargetLineNumber to linemetadata.IndexMax() instead, see below.
 
 	isShowingHelp bool
 	preHelpState  *_PreHelpState
@@ -131,8 +135,6 @@ type Pager struct {
 	//
 	// Ref: https://github.com/walles/moor/issues/175
 	bookmarks map[rune]scrollPosition
-
-	AfterExit func() error
 }
 
 type _PreHelpState struct {
@@ -151,6 +153,7 @@ Miscellaneous
 * Press '=' to toggle showing the status bar at the bottom
 * Press 'v' to edit the file in your favorite editor
 * Press CTRL-t to change the tab size
+* Press 'r' to reload the current file
 
 Moving around
 -------------
@@ -243,7 +246,7 @@ func NewPager(readers ...*reader.ReaderImpl) *Pager {
 	pager.mode = PagerModeViewing{pager: &pager}
 	pager.filteringReader = FilteringReader{
 		BackingReader: readers[0], // Always start with the first reader
-		FilterPattern: &pager.filterPattern,
+		Filter:        &pager.filter,
 	}
 
 	searchHistory := BootSearchHistory("")
@@ -252,10 +255,16 @@ func NewPager(readers ...*reader.ReaderImpl) *Pager {
 	return &pager
 }
 
+// ScreenSize returns the terminal width in columns and height in screen lines.
+func (p *Pager) ScreenSize() (int, linemetadata.ScreenLines) {
+	width, height := p.screen.Size()
+	return width, linemetadata.ScreenLines(height)
+}
+
 // How many lines are visible on screen? Depends on screen height and whether or
 // not the status bar is visible.
-func (p *Pager) visibleHeight() int {
-	_, height := p.screen.Size()
+func (p *Pager) visibleHeight() linemetadata.ScreenLines {
+	_, height := p.ScreenSize()
 
 	// Only the viewing mode can be without status bar
 	hasStatusBar := p.ShowStatusBar || !p.isViewing()
@@ -322,15 +331,27 @@ func renderHelpText(help string) []twin.StyledRune {
 //
 // Single quoted parts of the help text will be bolded.
 //
-// footer example value: "file.txt: 123 lines  0%"
+// prefix example value: "[1/3] "
+// filename example value: "file.txt"
+// status example value: ": 123 lines  0%"
 // help example value: "Press 'h' for help, 'q' to quit"
-func (p *Pager) setFooter(footer string, help string) {
+func (p *Pager) setFooter(prefix string, filename string, status string, help string) {
 	width, height := p.screen.Size()
 
 	pos := 0
 
-	// File name and percentage, no keyboard shortcut highlighting
-	for _, token := range footer + "  " {
+	// Prefix (multiple open files)
+	for _, token := range prefix {
+		pos += p.screen.SetCell(pos, height-1, twin.NewStyledRune(token, statusbarStyle))
+	}
+
+	// File name
+	for _, token := range filename {
+		pos += p.screen.SetCell(pos, height-1, twin.NewStyledRune(token, statusbarFileStyle))
+	}
+
+	// percentage,
+	for _, token := range status + "  " {
 		pos += p.screen.SetCell(pos, height-1, twin.NewStyledRune(token, statusbarStyle))
 	}
 
@@ -392,6 +413,42 @@ func (p *Pager) Reader() reader.Reader {
 	return &p.filteringReader
 }
 
+func (p *Pager) ReloadCurrentReader() {
+	p.readerLock.Lock()
+	defer p.readerLock.Unlock()
+
+	current := p.readers[p.currentReader]
+	if !current.ReadingDone.Load() || !current.HighlightingDone.Load() {
+		// The reader's formatting options (like the Style) are fully populated only
+		// once the initial read/highlighting pass consumes them from its channels.
+		// If we clone the reader before this happens, we copy a nil style, and the
+		// cloned reader will deadlock forever waiting for a style it will never receive.
+		//
+		// So let's just ignore this request. This should clear up quickly, and
+		// if the user presses 'r' again the reload will go through.
+		return
+	}
+
+	clone, err := current.Clone()
+	if err != nil {
+		log.Warnf("Failed to clone reader for reloading: %v", err)
+		return
+	}
+	if clone == nil {
+		// Nil indicates it's a stream or couldn't be cloned
+		return
+	}
+
+	current.Close()
+	p.readers[p.currentReader] = clone
+	p.filteringReader.SetBackingReader(clone)
+
+	select {
+	case p.readerSwitched <- struct{}{}:
+	default:
+	}
+}
+
 func (p *Pager) handleScrolledUp() {
 	p.setTargetLine(nil)
 }
@@ -404,6 +461,32 @@ func (p *Pager) handleScrolledDown() {
 	} else {
 		p.setTargetLine(nil)
 	}
+}
+
+func (p *Pager) handleMoreLinesAvailable() {
+	// Without the isViewing() check, following will continue while
+	// searching, and I prefer it to stop so people can see what they
+	// are searching in.
+	if !p.isViewing() || p.TargetLine == nil {
+		return
+	}
+
+	// The user wants to scroll down to a specific line number
+	lineCount := p.Reader().GetLineCount()
+	if lineCount == 0 {
+		// No lines yet, keep waiting
+		return
+	}
+
+	if linemetadata.IndexFromLength(lineCount).IsBefore(*p.TargetLine) {
+		// Not there yet, keep scrolling
+		p.scrollToEnd()
+		return
+	}
+
+	// We see the target, scroll to it
+	p.scrollPosition = NewScrollPositionFromIndex(*p.TargetLine, "goToTargetLine")
+	p.setTargetLine(nil)
 }
 
 // Except for setting TargetLine, this method also syncs with the reader so that
@@ -421,9 +504,8 @@ func (p *Pager) setTargetLine(targetLine *linemetadata.Index) {
 		return
 	}
 
-	// The value 1000 here is supposed to be larger than any possible screen
-	// height, to give us some lookahead and to avoid fetching too few lines.
-	targetValue := targetLine.Index() + 1000
+	// Set the target with some lookahead to avoid fetching too few lines.
+	targetValue := targetLine.Index() + reader.DEFAULT_PAUSE_AFTER_LINES/2
 	if targetValue < targetLine.Index() {
 		// Overflow detected, clip to max int
 		targetValue = math.MaxInt
@@ -491,7 +573,7 @@ func (p *Pager) StartPaging(screen twin.Screen, chromaStyle *chroma.Style, chrom
 			select {
 			case <-p.readerSwitched:
 				// A different reader is now active
-				p.filterPattern = nil
+				p.filter = search.Search{}
 
 				p.readerLock.Lock()
 				r = p.readers[p.currentReader]
@@ -622,17 +704,7 @@ func (p *Pager) StartPaging(screen twin.Screen, chromaStyle *chroma.Style, chrom
 			return
 
 		case eventMoreLinesAvailable:
-			if p.TargetLine != nil {
-				// The user wants to scroll down to a specific line number
-				if linemetadata.IndexFromLength(p.Reader().GetLineCount()).IsBefore(*p.TargetLine) {
-					// Not there yet, keep scrolling
-					p.scrollToEnd()
-				} else {
-					// We see the target, scroll to it
-					p.scrollPosition = NewScrollPositionFromIndex(*p.TargetLine, "goToTargetLine")
-					p.setTargetLine(nil)
-				}
-			}
+			p.handleMoreLinesAvailable()
 
 		case eventMaybeDone:
 			// Man pages come pre-formatted for the screen width, and line
@@ -654,6 +726,8 @@ func (p *Pager) StartPaging(screen twin.Screen, chromaStyle *chroma.Style, chrom
 			log.Warnf("Unhandled event type: %v", event)
 		}
 	}
+
+	log.Info("Pager main loop done")
 }
 
 // The height parameter is the terminal height minus the height of the user's
@@ -725,7 +799,7 @@ func (p *Pager) fitsOnOneScreen() bool {
 
 	lines := reader.GetLines(linemetadata.Index{}, reader.GetLineCount())
 	for _, line := range lines.Lines {
-		rendered := line.HighlightedTokens(twin.StyleDefault, twin.StyleDefault, nil).StyledRunes
+		rendered := line.HighlightedTokens(twin.StyleDefault, twin.StyleDefault, search.Search{}, width+1).StyledRunes
 		if len(rendered) > width {
 			// This line is too long to fit on one screen line, no fit
 			return false

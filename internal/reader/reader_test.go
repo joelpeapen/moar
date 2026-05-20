@@ -1,17 +1,16 @@
 package reader
 
 import (
+	"math"
 	"os"
 	"os/exec"
 	"path"
+	"runtime"
 	"strconv"
 	"strings"
 	"testing"
-	"time"
 
-	"github.com/alecthomas/chroma/v2"
 	"github.com/alecthomas/chroma/v2/formatters"
-	"github.com/alecthomas/chroma/v2/lexers"
 	"github.com/alecthomas/chroma/v2/styles"
 	log "github.com/sirupsen/logrus"
 	"gotest.tools/v3/assert"
@@ -213,8 +212,8 @@ func TestGetLongLine(t *testing.T) {
 	assert.Equal(t, len(lines.Lines), 1)
 
 	line := lines.Lines[0]
-	assert.Assert(t, strings.HasPrefix(line.Plain(), "1 2 3 4"), "<%s>", line)
-	assert.Assert(t, strings.HasSuffix(line.Plain(), "0123456789"), line)
+	assert.Assert(t, strings.HasPrefix(line.Plain(), "1 2 3 4"), "<%s>", line.Plain())
+	assert.Assert(t, strings.HasSuffix(line.Plain(), "0123456789"), line.Plain())
 
 	assert.Equal(t, len(line.Plain()), 100021)
 }
@@ -252,340 +251,45 @@ func TestStatusText(t *testing.T) {
 	if line.Lines != nil {
 		t.Error("line.lines is should have been nil when reading from an empty stream")
 	}
-	assert.Equal(t, line.StatusText, "empty: <empty>")
+	assert.Equal(t, line.FilenameText, "empty")
+	assert.Equal(t, line.StatusText, ": <empty>")
 }
 
-func testCompressedFile(t *testing.T, filename string) {
-	filenameWithPath := path.Join(samplesDir, filename)
-	reader, e := NewFromFilename(filenameWithPath, formatters.TTY16m, ReaderOptions{Style: styles.Get("native")})
-	if e != nil {
-		t.Errorf("Error opening file <%s>: %s", filenameWithPath, e.Error())
-		panic(e)
-	}
-	assert.NilError(t, reader.Wait())
+func TestClipRangeToLength(t *testing.T) {
+	// Within bounds
+	i0, i1 := clipRangeToLength(linemetadata.Index{}, 1, 20)
+	assert.Equal(t, i0, 0)
+	assert.Equal(t, i1, 0)
 
-	lines := reader.GetLines(linemetadata.Index{}, 5)
-	assert.Equal(t, lines.Lines[0].Plain(), "This is a compressed file", "%s", filename)
-}
+	// Touching the end, still within bounds
+	i0, i1 = clipRangeToLength(linemetadata.Index{}, 1, 0)
+	assert.Equal(t, i0, 0)
+	assert.Equal(t, i1, 0)
 
-func TestCompressedFiles(t *testing.T) {
-	testCompressedFile(t, "compressed.txt.gz")
-	testCompressedFile(t, "compressed.txt.bz2")
-	testCompressedFile(t, "compressed.txt.xz")
-	testCompressedFile(t, "compressed.txt.zst")
-	testCompressedFile(t, "compressed.txt.zstd")
-}
+	// Overflow, push down to indices 6, 7, 8
+	i0, i1 = clipRangeToLength(linemetadata.IndexFromOneBased(100), 3, 8)
+	assert.Equal(t, i0, 6)
+	assert.Equal(t, i1, 8)
 
-func TestReadFileDoneNoHighlighting(t *testing.T) {
-	testMe, err := NewFromFilename(samplesDir+"/empty",
-		formatters.TTY, ReaderOptions{Style: styles.Get("native")})
-	assert.NilError(t, err)
+	// Overflow, push down and clip to indices 0, 1
+	i0, i1 = clipRangeToLength(linemetadata.IndexFromOneBased(100), 3, 1)
+	assert.Equal(t, i0, 0)
+	assert.Equal(t, i1, 1)
 
-	assert.NilError(t, testMe.Wait())
-}
+	// Maxed out start
+	i0, i1 = clipRangeToLength(linemetadata.IndexMax(), 1, 0)
+	assert.Equal(t, i0, 0)
+	assert.Equal(t, i1, 0)
 
-func TestReadFileDoneYesHighlighting(t *testing.T) {
-	testMe, err := NewFromFilename("reader_test.go",
-		formatters.TTY, ReaderOptions{Style: styles.Get("native")})
-	assert.NilError(t, err)
+	// Maxed out count
+	i0, i1 = clipRangeToLength(linemetadata.Index{}, math.MaxInt, 0)
+	assert.Equal(t, i0, 0)
+	assert.Equal(t, i1, 0)
 
-	assert.NilError(t, testMe.Wait())
-}
-
-func TestReadStreamDoneNoHighlighting(t *testing.T) {
-	testMe, err := NewFromStream("", strings.NewReader("Johan"), nil, ReaderOptions{Style: &chroma.Style{}})
-	assert.NilError(t, err)
-
-	assert.NilError(t, testMe.Wait())
-}
-
-func TestReadStreamDoneYesHighlighting(t *testing.T) {
-	testMe, err := NewFromStream("",
-		strings.NewReader("Johan"),
-		formatters.TTY, ReaderOptions{Lexer: lexers.EmacsLisp, Style: styles.Get("native")})
-	assert.NilError(t, err)
-
-	assert.NilError(t, testMe.Wait())
-}
-
-func TestReadTextDone(t *testing.T) {
-	testMe := NewFromTextForTesting("", "Johan")
-
-	assert.NilError(t, testMe.Wait())
-}
-
-// JSON should be auto detected and formatted
-func TestFormatJson(t *testing.T) {
-	// Note the space after "key" to verify formatting actually happens
-	jsonStream := strings.NewReader(`{"key" :"value"}`)
-	testMe, err := NewFromStream(
-		"JSON test",
-		jsonStream,
-		formatters.TTY,
-		ReaderOptions{
-			Style:        styles.Get("native"),
-			ShouldFormat: true,
-		})
-	assert.NilError(t, err)
-
-	assert.NilError(t, testMe.Wait())
-
-	lines := testMe.GetLines(linemetadata.Index{}, 10)
-	assert.Equal(t, lines.Lines[0].Plain(), "{")
-	assert.Equal(t, lines.Lines[1].Plain(), `  "key": "value"`)
-	assert.Equal(t, lines.Lines[2].Plain(), "}")
-	assert.Equal(t, len(lines.Lines), 3)
-}
-
-func TestFormatJsonArray(t *testing.T) {
-	// Note the space after "key" to verify formatting actually happens
-	jsonStream := strings.NewReader(`[{"key" :"value"}]`)
-	testMe, err := NewFromStream(
-		"JSON test",
-		jsonStream,
-		formatters.TTY,
-		ReaderOptions{
-			Style:        styles.Get("native"),
-			ShouldFormat: true,
-		})
-	assert.NilError(t, err)
-
-	assert.NilError(t, testMe.Wait())
-
-	lines := testMe.GetLines(linemetadata.Index{}, 10)
-	assert.Equal(t, lines.Lines[0].Plain(), "[")
-	assert.Equal(t, lines.Lines[1].Plain(), "  {")
-	assert.Equal(t, lines.Lines[2].Plain(), `    "key": "value"`)
-	assert.Equal(t, lines.Lines[3].Plain(), "  }")
-	assert.Equal(t, lines.Lines[4].Plain(), "]")
-	assert.Equal(t, len(lines.Lines), 5)
-}
-
-// If people keep appending to the currently opened file we should display those
-// changes.
-func TestReadUpdatingFile(t *testing.T) {
-	// Make a temp file containing one line of text, ending with a newline
-	file, err := os.CreateTemp("", "moor-TestReadUpdatingFile-*.txt")
-	assert.NilError(t, err)
-	defer os.Remove(file.Name()) //nolint:errcheck
-
-	const firstLineString = "First line\n"
-	_, err = file.WriteString(firstLineString)
-	assert.NilError(t, err)
-
-	// Start a reader on that file
-	testMe, err := NewFromFilename(file.Name(), formatters.TTY16m, ReaderOptions{Style: styles.Get("native")})
-	assert.NilError(t, err)
-
-	// Wait for the reader to finish reading
-	assert.NilError(t, testMe.Wait())
-	assert.Equal(t, len([]byte(firstLineString)), int(testMe.bytesCount))
-
-	// Verify we got the single line
-	allLines := testMe.GetLines(linemetadata.Index{}, 10)
-	assert.Equal(t, len(allLines.Lines), 1)
-	assert.Equal(t, testMe.GetLineCount(), 1)
-	assert.Equal(t, allLines.Lines[0].Plain(), "First line")
-
-	// Append a line to the file
-	const secondLineString = "Second line\n"
-	_, err = file.WriteString(secondLineString)
-	assert.NilError(t, err)
-
-	// Give the reader some time to react
-	for range 20 {
-		allLines := testMe.GetLines(linemetadata.Index{}, 10)
-		if len(allLines.Lines) == 2 {
-			break
-		}
-		time.Sleep(100 * time.Millisecond)
-	}
-
-	// Verify we got the two lines
-	allLines = testMe.GetLines(linemetadata.Index{}, 10)
-	assert.Equal(t, len(allLines.Lines), 2, "Expected two lines after adding a second one, got %d", len(allLines.Lines))
-	assert.Equal(t, testMe.GetLineCount(), 2)
-	assert.Equal(t, allLines.Lines[0].Plain(), "First line")
-	assert.Equal(t, allLines.Lines[1].Plain(), "Second line")
-
-	assert.Equal(t, int(testMe.bytesCount), len([]byte(firstLineString+secondLineString)))
-
-	// Append a third line to the file. We want to verify line 2 didn't just
-	// succeed due to special handling.
-	const thirdLineString = "Third line\n"
-	_, err = file.WriteString(thirdLineString)
-	assert.NilError(t, err)
-
-	// Give the reader some time to react
-	for i := 0; i < 20; i++ {
-		allLines = testMe.GetLines(linemetadata.Index{}, 10)
-		if len(allLines.Lines) == 3 {
-			break
-		}
-		time.Sleep(100 * time.Millisecond)
-	}
-
-	// Verify we got all three lines
-	allLines = testMe.GetLines(linemetadata.Index{}, 10)
-	assert.Equal(t, len(allLines.Lines), 3, "Expected three lines after adding a third one, got %d", len(allLines.Lines))
-	assert.Equal(t, testMe.GetLineCount(), 3)
-	assert.Equal(t, allLines.Lines[0].Plain(), "First line")
-	assert.Equal(t, allLines.Lines[1].Plain(), "Second line")
-	assert.Equal(t, allLines.Lines[2].Plain(), "Third line")
-
-	assert.Equal(t, int(testMe.bytesCount), len([]byte(firstLineString+secondLineString+thirdLineString)))
-}
-
-// If people keep appending to the currently opened file we should display those
-// changes.
-//
-// This test verifies it with an initially empty file.
-func TestReadUpdatingFile_InitiallyEmpty(t *testing.T) {
-	// Make a temp file containing one line of text, ending with a newline
-	file, err := os.CreateTemp("", "moor-TestReadUpdatingFile_NoNewlineAtEOF-*.txt")
-	assert.NilError(t, err)
-	defer os.Remove(file.Name()) //nolint:errcheck
-
-	// Start a reader on that file
-	testMe, err := NewFromFilename(file.Name(), formatters.TTY16m, ReaderOptions{Style: styles.Get("native")})
-	assert.NilError(t, err)
-
-	// Wait for the reader to finish reading
-	assert.NilError(t, testMe.Wait())
-
-	// Verify no lines
-	allLines := testMe.GetLines(linemetadata.Index{}, 10)
-	assert.Equal(t, len(allLines.Lines), 0)
-	assert.Equal(t, testMe.GetLineCount(), 0)
-
-	// Append a line to the file
-	_, err = file.WriteString("Text\n")
-	assert.NilError(t, err)
-
-	// Give the reader some time to react
-	for i := 0; i < 20; i++ {
-		allLines := testMe.GetLines(linemetadata.Index{}, 10)
-		if len(allLines.Lines) == 1 {
-			break
-		}
-		time.Sleep(100 * time.Millisecond)
-	}
-
-	// Verify we got the two lines
-	allLines = testMe.GetLines(linemetadata.Index{}, 10)
-	assert.Equal(t, len(allLines.Lines), 1, "Expected one line after adding one, got %d", len(allLines.Lines))
-	assert.Equal(t, testMe.GetLineCount(), 1)
-	assert.Equal(t, allLines.Lines[0].Plain(), "Text")
-}
-
-// If people keep appending to the currently opened file we should display those
-// changes.
-//
-// This test verifies it with the initial contents not ending with a linefeed.
-func TestReadUpdatingFile_HalfLine(t *testing.T) {
-	// Make a temp file containing one line of text, ending with a newline
-	file, err := os.CreateTemp("", "moor-TestReadUpdatingFile-*.txt")
-	assert.NilError(t, err)
-	defer os.Remove(file.Name()) //nolint:errcheck
-
-	_, err = file.WriteString("Start")
-	assert.NilError(t, err)
-
-	// Start a reader on that file
-	testMe, err := NewFromFilename(file.Name(), formatters.TTY16m, ReaderOptions{Style: styles.Get("native")})
-	assert.NilError(t, err)
-
-	// Wait for the reader to finish reading
-	assert.NilError(t, testMe.Wait())
-	assert.Equal(t, int(testMe.bytesCount), len([]byte("Start")))
-
-	// Append the rest of the line
-	const secondLineString = ", end\n"
-	_, err = file.WriteString(secondLineString)
-	assert.NilError(t, err)
-
-	// Give the reader some time to react
-	for i := 0; i < 20; i++ {
-		allLines := testMe.GetLines(linemetadata.Index{}, 10)
-		if len(allLines.Lines) == 2 {
-			break
-		}
-		time.Sleep(100 * time.Millisecond)
-	}
-
-	// Verify we got the two lines
-	allLines := testMe.GetLines(linemetadata.Index{}, 10)
-	assert.Equal(t, len(allLines.Lines), 1, "Still expecting one line, got %d", len(allLines.Lines))
-	assert.Equal(t, testMe.GetLineCount(), 1)
-	assert.Equal(t, allLines.Lines[0].Plain(), "Start, end")
-
-	assert.Equal(t, int(testMe.bytesCount), len([]byte("Start, end\n")))
-}
-
-// If people keep appending to the currently opened file we should display those
-// changes.
-//
-// This test verifies it with the initial contents ending in the middle of an UTF-8 character.
-func TestReadUpdatingFile_HalfUtf8(t *testing.T) {
-	// Make a temp file containing one line of text, ending with a newline
-	file, err := os.CreateTemp("", "moor-TestReadUpdatingFile-*.txt")
-	assert.NilError(t, err)
-	defer os.Remove(file.Name()) //nolint:errcheck
-
-	// Write "h" and half an "ä" to the file
-	_, err = file.Write([]byte("här"[0:2]))
-	assert.NilError(t, err)
-
-	// Start a reader on that file
-	testMe, err := NewFromFilename(file.Name(), formatters.TTY16m, ReaderOptions{Style: styles.Get("native")})
-	assert.NilError(t, err)
-
-	// Wait for the reader to finish reading
-	assert.NilError(t, testMe.Wait())
-	assert.Equal(t, testMe.GetLineCount(), 1)
-
-	// Append the rest of the UTF-8 character
-	_, err = file.WriteString("här"[2:])
-	assert.NilError(t, err)
-
-	// Give the reader some time to react
-	for i := 0; i < 20; i++ {
-		allLines := testMe.GetLines(linemetadata.Index{}, 10)
-		if len(allLines.Lines) == 2 {
-			break
-		}
-		time.Sleep(100 * time.Millisecond)
-	}
-
-	// Verify we got the two lines
-	allLines := testMe.GetLines(linemetadata.Index{}, 10)
-	assert.Equal(t, len(allLines.Lines), 1, "Still expecting one line, got %d", len(allLines.Lines))
-	assert.Equal(t, testMe.GetLineCount(), 1)
-	assert.Equal(t, allLines.Lines[0].Plain(), "här")
-
-	assert.Equal(t, int(testMe.bytesCount), len([]byte("här")))
-}
-
-// Fetching lines should fill in the plain text
-func TestCachePlainText(t *testing.T) {
-	reader := NewFromTextForTesting("TestCachePlainText", "Hällo\nWörld")
-	assert.NilError(t, reader.Wait())
-
-	assert.Equal(t, reader.GetLineCount(), 2)
-
-	// Plain should initially be nil
-	assert.Assert(t, reader.lines[0].plain == nil)
-	assert.Assert(t, reader.lines[1].plain == nil)
-
-	// Getting one line should populate its plain text
-	reader.GetLine(linemetadata.IndexFromOneBased(2))
-	assert.Assert(t, reader.lines[0].plain == nil)
-	assert.Assert(t, reader.lines[1].plain != nil)
-
-	// Getting multiple lines should populate their plain text
-	reader.GetLines(linemetadata.IndexFromOneBased(1), 2)
-	assert.Assert(t, reader.lines[0].plain != nil)
-	assert.Assert(t, reader.lines[1].plain != nil)
+	// Maxed out start and count
+	i0, i1 = clipRangeToLength(linemetadata.IndexMax(), math.MaxInt, 3)
+	assert.Equal(t, i0, 0)
+	assert.Equal(t, i1, 3)
 }
 
 // How long does it take to read a file?
@@ -634,6 +338,11 @@ func BenchmarkReadLargeFile(b *testing.B) {
 	// Make sure we don't pause during the benchmark
 	targetLineCount := largeSizeBytes * 2
 
+	b.SetBytes(int64(totalBytesWritten))
+
+	// Try making the whole run more predictable
+	runtime.GC()
+
 	b.ResetTimer()
 	for n := 0; n < b.N; n++ {
 		readMe, err := NewFromFilename(
@@ -645,6 +354,57 @@ func BenchmarkReadLargeFile(b *testing.B) {
 			})
 		assert.NilError(b, err)
 
+		<-readMe.MaybeDone
+		assert.NilError(b, readMe.Wait())
+		assert.NilError(b, readMe.Err)
+	}
+}
+
+// Try loading a file with a long line
+func BenchmarkReadLongLine(b *testing.B) {
+	// Try loading a line this long
+	const longLineBytes = 3_000_000
+
+	// First, create it from something...
+	lineBytes := []byte(strings.Repeat("x", longLineBytes-1) + "\n")
+	testdir := b.TempDir()
+	largeFileName := testdir + "/long-line-file.txt"
+	largeFile, err := os.Create(largeFileName)
+	assert.NilError(b, err)
+
+	totalBytesWritten := 0
+	for totalBytesWritten < longLineBytes {
+		written, err := largeFile.Write(lineBytes)
+		assert.NilError(b, err)
+
+		totalBytesWritten += written
+	}
+	err = largeFile.Close()
+	assert.NilError(b, err)
+
+	// Make sure we don't pause during the benchmark
+	targetLineCount := longLineBytes * 2
+
+	b.SetBytes(int64(totalBytesWritten))
+
+	b.ReportAllocs()
+	b.ResetTimer()
+
+	for b.Loop() {
+		b.StopTimer()
+		runtime.GC()
+		b.StartTimer()
+
+		readMe, err := NewFromFilename(
+			largeFileName,
+			formatters.TTY16m,
+			ReaderOptions{
+				Style:           styles.Get("native"),
+				PauseAfterLines: &targetLineCount,
+			})
+		assert.NilError(b, err)
+
+		<-readMe.MaybeDone
 		assert.NilError(b, readMe.Wait())
 		assert.NilError(b, readMe.Err)
 	}

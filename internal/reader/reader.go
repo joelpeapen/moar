@@ -3,14 +3,10 @@ package reader
 import (
 	"bufio"
 	"bytes"
-	"encoding/json"
-	"encoding/xml"
 	"fmt"
 	"io"
 	"math"
 	"os"
-	"path/filepath"
-	"runtime/debug"
 	"slices"
 	"strings"
 	"sync"
@@ -18,20 +14,24 @@ import (
 	"time"
 
 	"github.com/walles/moor/v2/internal/linemetadata"
-	"github.com/walles/moor/v2/internal/textstyles"
 	"github.com/walles/moor/v2/internal/util"
 
 	"github.com/alecthomas/chroma/v2"
-	"github.com/alecthomas/chroma/v2/lexers"
 	log "github.com/sirupsen/logrus"
 )
 
-// Files larger than this won't be highlighted
-//
-//revive:disable-next-line:var-naming
-const MAX_HIGHLIGHT_SIZE int64 = 1024 * 1024
+// An 1.7MB file took 2s to highlight. The number for this limit is totally
+// negotiable.
+const MAX_HIGHLIGHT_SIZE int64 = 2_000_000
 
-const DEFAULT_PAUSE_AFTER_LINES = 20_000
+// To cap resource usage when not needed, start by reading this many lines into
+// memory. If the user scrolls near the end or starts searching, we'll read
+// more.
+//
+// Ref: https://github.com/walles/moor/issues/296
+const DEFAULT_PAUSE_AFTER_LINES = 50_000
+
+var DisablePlainCachingForBenchmarking = false
 
 type ReaderOptions struct {
 	// Format JSON input
@@ -58,6 +58,13 @@ type Reader interface {
 	// This method will try to honor wantedLineCount over firstLine. This means
 	// that the returned first line may be different from the requested one.
 	GetLines(firstLine linemetadata.Index, wantedLineCount int) InputLines
+
+	// GetLines gets the indicated lines from the input. The lines will be stored
+	// in the provided preallocated slice to avoid allocations. The line count is
+	// determined by the capacity of the provided slice.
+	//
+	// The return value is the status text for the returned lines.
+	GetLinesPreallocated(firstLine linemetadata.Index, resultLines *[]NumberedLine) (string, string)
 
 	// False when paused. Showing the paused line count is confusing, because
 	// the user might think that the number is the total line count, even though
@@ -90,8 +97,19 @@ type ReaderImpl struct {
 	// is not set, we are not reading from a file.
 	FileName *string
 
-	// How many bytes have we read so far?
+	// True if the file we read from was compressed.
+	IsCompressed bool
+
+	// How many bytes have we successfully decoded and read into memory so far?
+	//
+	// Note: For compressed files, this is the DECOMPRESSED byte count. Do NOT
+	// compare this directly to os.FileInfo.Size() (which is the compressed size
+	// on disk), as they represent different metrics.
 	bytesCount int64
+
+	// The first bytes read from the file. Used to determine if the file was replaced
+	// or appended to when it grows.
+	headerBytes []byte
 
 	endsWithNewline bool
 
@@ -109,6 +127,9 @@ type ReaderImpl struct {
 	// undefined behavior.
 	doneWaitingForFirstByte chan bool
 
+	// Used for detecting file modifications
+	lastStat os.FileInfo
+
 	// For telling the UI it should recheck the --quit-if-one-screen conditions.
 	// Signalled when either highlighting is done or reading is done.
 	MaybeDone chan bool
@@ -123,6 +144,13 @@ type ReaderImpl struct {
 
 	// PauseStatus is true if the reader is paused, false if it is not
 	PauseStatus *atomic.Bool
+
+	// Stored for use when reloading the file after it has been rewritten.
+	formatter     chroma.Formatter
+	readerOptions ReaderOptions
+
+	// Set to true when this reader is discarded.
+	closed atomic.Bool
 }
 
 // InputLines contains a number of lines from the reader, plus metadata
@@ -130,398 +158,10 @@ type InputLines struct {
 	Lines []NumberedLine
 
 	// "monkey.txt: 1-23/45 51%"
-	StatusText string
+	FilenameText string
+	StatusText   string
 }
 
-// Count lines in the original file and preallocate space for them.  Good
-// performance improvement:
-//
-// go test -benchmem -benchtime=10s -run='^$' -bench 'ReadLargeFile'
-func (reader *ReaderImpl) preAllocLines() {
-	if reader.FileName == nil {
-		return
-	}
-
-	if reader.GetLineCount() > 0 {
-		// We already have lines, could be because we're tailing some file. Too
-		// late for pre-allocation.
-		return
-	}
-
-	lineCount, err := countLines(*reader.FileName)
-	if err != nil {
-		log.Warn("Line counting failed: ", err)
-		return
-	}
-
-	reader.Lock()
-	defer reader.Unlock()
-
-	if len(reader.lines) != 0 {
-		// I don't understand how this could happen.
-		log.Warnf("Already had %d lines by the time counting was done", len(reader.lines))
-		return
-	}
-
-	// We had no lines since before, this is the expected happy path.
-	reader.lines = make([]*Line, 0, lineCount)
-}
-
-// This is the reader's main function. It will be run in a goroutine. First it
-// reads the stream until the end, then starts tailing.
-func (reader *ReaderImpl) readStream(stream io.Reader, formatter chroma.Formatter, options ReaderOptions) {
-	reader.consumeLinesFromStream(stream)
-
-	reader.ReadingDone.Store(true)
-	select {
-	case reader.MaybeDone <- true:
-	default:
-	}
-
-	t0 := time.Now()
-	style := <-reader.highlightingStyle
-	options.Style = &style
-	highlightFromMemory(reader, formatter, options)
-	log.Debug("highlightFromMemory() took ", time.Since(t0))
-
-	reader.HighlightingDone.Store(true)
-	select {
-	case reader.MaybeDone <- true:
-	default:
-	}
-
-	// Tail the file if the stream is coming from a file.
-	// Ref: https://github.com/walles/moor/issues/224
-	err := reader.tailFile()
-	if err != nil {
-		log.Warn("Failed to tail file: ", err)
-	}
-}
-
-// Pause if we should pause, otherwise not. Pausing means waiting for
-// pauseAfterLinesUpdated to be signalled in SetPauseAfterLines().
-func (reader *ReaderImpl) maybePause() {
-	for {
-		reader.RLock()
-		shouldPause := len(reader.lines) >= reader.pauseAfterLines
-		reader.RUnlock()
-
-		if !shouldPause {
-			// Not there yet, no pause
-			reader.setPauseStatus(false)
-			return
-		}
-
-		reader.setPauseStatus(true)
-		<-reader.pauseAfterLinesUpdated
-	}
-}
-
-// This function will update the Reader struct. It is expected to run in a
-// goroutine.
-//
-// It is used both during the initial read of the stream until it ends, and
-// while tailing files for changes.
-func (reader *ReaderImpl) consumeLinesFromStream(stream io.Reader) {
-	reader.preAllocLines()
-
-	inspectionReader := inspectionReader{base: stream}
-	bufioReader := bufio.NewReader(&inspectionReader)
-	completeLine := make([]byte, 0)
-
-	t0 := time.Now()
-	for {
-		reader.maybePause()
-
-		keepReadingLine := true
-		eof := false
-
-		var lineBytes []byte
-		var err error
-		for keepReadingLine {
-			lineBytes, keepReadingLine, err = bufioReader.ReadLine()
-
-			if err == nil {
-				select {
-				// Async write, we probably already wrote to it during the last
-				// iteration
-				case reader.doneWaitingForFirstByte <- true:
-				default:
-				}
-
-				completeLine = append(completeLine, lineBytes...)
-				continue
-			}
-
-			// Something went wrong
-
-			if err == io.EOF {
-				eof = true
-				break
-			}
-
-			reader.Lock()
-			if reader.Err == nil {
-				// Store the error unless it overwrites one we already have
-				reader.Err = fmt.Errorf("error reading line from input stream: %w", err)
-			}
-			reader.Unlock()
-		}
-
-		if eof {
-			break
-		}
-
-		if reader.Err != nil {
-			break
-		}
-
-		newLineString := string(completeLine)
-		newLine := NewLine(newLineString)
-
-		reader.Lock()
-		if len(reader.lines) > 0 && !reader.endsWithNewline {
-			// The last line didn't end with a newline, append to it
-			newLineString = reader.lines[len(reader.lines)-1].raw + newLineString
-			newLine = NewLine(newLineString)
-			reader.lines[len(reader.lines)-1] = &newLine
-		} else {
-			reader.lines = append(reader.lines, &newLine)
-		}
-		reader.endsWithNewline = true
-
-		reader.Unlock()
-
-		// Reset our line buffer
-		completeLine = completeLine[:0]
-
-		// This is how to do a non-blocking write to a channel:
-		// https://gobyexample.com/non-blocking-channel-operations
-		select {
-		case reader.MoreLinesAdded <- true:
-		default:
-			// Default case required for the write to be non-blocking
-		}
-	}
-
-	if reader.FileName != nil {
-		reader.Lock()
-		reader.bytesCount += inspectionReader.bytesCount
-		reader.Unlock()
-	}
-
-	// If the stream was empty we never got any first byte. Make sure people
-	// stop waiting in this case. Async write since it might already have been
-	// written to.
-	select {
-	case reader.doneWaitingForFirstByte <- true:
-	default:
-	}
-
-	reader.endsWithNewline = inspectionReader.endedWithNewline
-
-	log.Info("Stream read in ", time.Since(t0), ", have ", reader.GetLineCount(), " lines")
-}
-
-func (reader *ReaderImpl) tailFile() error {
-	reader.RLock()
-	fileName := reader.FileName
-	reader.RUnlock()
-	if fileName == nil {
-		return nil
-	}
-
-	log.Debugf("Tailing file %s", *fileName)
-
-	for {
-		// NOTE: We could use something like
-		// https://github.com/fsnotify/fsnotify instead of sleeping and polling
-		// here.
-		time.Sleep(1 * time.Second)
-
-		fileStats, err := os.Stat(*fileName)
-		if err != nil {
-			log.Debugf("Failed to stat file %s while tailing, giving up: %s", *fileName, err.Error())
-			return nil
-		}
-
-		reader.RLock()
-		bytesCount := reader.bytesCount
-		reader.RUnlock()
-
-		if bytesCount == -1 {
-			log.Debugf("Bytes count unknown for %s, stop tailing", *fileName)
-			return nil
-		}
-
-		if fileStats.Size() == bytesCount {
-			log.Tracef("File %s unchanged at %d bytes, continue tailing", *fileName, fileStats.Size())
-			continue
-		}
-
-		if fileStats.Size() < bytesCount {
-			log.Debugf("File %s shrunk from %d to %d bytes, stop tailing",
-				*fileName, bytesCount, fileStats.Size())
-			return nil
-		}
-
-		// File grew, read the new lines
-		stream, _, err := ZOpen(*fileName)
-		if err != nil {
-			log.Debugf("Failed to open file %s for re-reading while tailing: %s", *fileName, err.Error())
-			return nil
-		}
-
-		seekable, ok := stream.(io.ReadSeekCloser)
-		if !ok {
-			err = stream.Close()
-			if err != nil {
-				log.Debugf("Giving up on tailing, failed to close non-seekable stream from %s: %s", *fileName, err.Error())
-				return nil
-			}
-			log.Debugf("Giving up on tailing, file %s is not seekable", *fileName)
-			return nil
-		}
-		_, err = seekable.Seek(bytesCount, io.SeekStart)
-		if err != nil {
-			log.Debugf("Failed to seek in file %s while tailing: %s", *fileName, err.Error())
-			return nil
-		}
-
-		log.Tracef("File %s up from %d bytes to %d bytes, reading more lines...", *fileName, bytesCount, fileStats.Size())
-
-		reader.consumeLinesFromStream(seekable)
-		err = seekable.Close()
-		if err != nil {
-			// This can lead to file handle leaks
-			return fmt.Errorf("failed to close file %s after tailing: %w", *fileName, err)
-		}
-	}
-}
-
-// NewFromStream creates a new stream reader
-//
-// The display name can be an empty string ("").
-//
-// If non-empty, the name will be displayed by the pager in the bottom left
-// corner to help the user keep track of what is being paged.
-//
-// Note that you must call reader.SetStyleForHighlighting() after this to get
-// highlighting.
-func NewFromStream(displayName string, reader io.Reader, formatter chroma.Formatter, options ReaderOptions) (*ReaderImpl, error) {
-	zReader, err := ZReader(reader)
-	if err != nil {
-		return nil, err
-	}
-	mReader := newReaderFromStream(zReader, nil, formatter, options)
-
-	if len(displayName) > 0 {
-		mReader.Lock()
-		mReader.DisplayName = &displayName
-		mReader.Unlock()
-	}
-
-	if options.Style != nil {
-		mReader.SetStyleForHighlighting(*options.Style)
-	}
-
-	return mReader, nil
-}
-
-// newReaderFromStream creates a new stream reader
-//
-// originalFileName is used for counting the lines in the file. nil for
-// don't-know (streams) or not countable (compressed files). The line count is
-// then used for pre-allocating the lines slice, which improves large file
-// loading performance.
-//
-// If lexer is set, the file will be highlighted after being fully read.
-//
-// Whatever data we get from the reader, that's what we'll have. Or in other
-// words, if the input needs to be decompressed, do that before coming here.
-//
-// Note that you must call reader.SetStyleForHighlighting() after this to get
-// highlighting.
-func newReaderFromStream(reader io.Reader, originalFileName *string, formatter chroma.Formatter, options ReaderOptions) *ReaderImpl {
-	readingDone := atomic.Bool{}
-	readingDone.Store(false)
-	highlightingDone := atomic.Bool{}
-	highlightingDone.Store(false)
-	pauseStatus := atomic.Bool{}
-	pauseStatus.Store(false)
-	pauseAfterLines := DEFAULT_PAUSE_AFTER_LINES
-	if options.PauseAfterLines != nil {
-		pauseAfterLines = *options.PauseAfterLines
-	}
-	var displayFileName *string
-	if originalFileName != nil {
-		basename := filepath.Base(*originalFileName)
-		displayFileName = &basename
-	}
-	returnMe := ReaderImpl{
-		FileName:    originalFileName,
-		DisplayName: displayFileName,
-
-		pauseAfterLines:        pauseAfterLines,
-		pauseAfterLinesUpdated: make(chan bool, 1),
-
-		PauseStatus: &pauseStatus,
-
-		MoreLinesAdded:          make(chan bool, 1),
-		MaybeDone:               make(chan bool, 2),
-		highlightingStyle:       make(chan chroma.Style, 1),
-		doneWaitingForFirstByte: make(chan bool, 1),
-		HighlightingDone:        &highlightingDone,
-		ReadingDone:             &readingDone,
-	}
-
-	go func() {
-		defer func() {
-			PanicHandler("newReaderFromStream()/readStream()", recover(), debug.Stack())
-		}()
-
-		returnMe.readStream(reader, formatter, options)
-	}()
-
-	return &returnMe
-}
-
-// Testing only!! May or may not hang if run in real world scenarios.
-//
-// NewFromTextForTesting creates a Reader from a block of text.
-//
-// First parameter is the name of this Reader. This name will be displayed by
-// Moor in the bottom left corner of the screen.
-//
-// Calling Wait() on this Reader will always return immediately, no
-// asynchronous ops will be performed.
-func NewFromTextForTesting(name string, text string) *ReaderImpl {
-	noExternalNewlines := strings.Trim(text, "\n")
-	lines := []*Line{}
-	if len(noExternalNewlines) > 0 {
-		for _, lineString := range strings.Split(noExternalNewlines, "\n") {
-			line := NewLine(lineString)
-			lines = append(lines, &line)
-		}
-	}
-	readingDone := atomic.Bool{}
-	readingDone.Store(true)
-	highlightingDone := atomic.Bool{}
-	highlightingDone.Store(true) // No highlighting to do = nothing left = Done!
-	returnMe := &ReaderImpl{
-		lines:                   lines,
-		ReadingDone:             &readingDone,
-		HighlightingDone:        &highlightingDone,
-		doneWaitingForFirstByte: make(chan bool, 1),
-	}
-	if name != "" {
-		returnMe.DisplayName = &name
-	}
-
-	return returnMe
-}
-
-// Duplicate of moor/moor.go:TryOpen
 func TryOpen(filename string) error {
 	// Try opening the file
 	tryMe, err := os.Open(filename)
@@ -529,22 +169,32 @@ func TryOpen(filename string) error {
 		return err
 	}
 
-	// Try reading a byte
-	buffer := make([]byte, 1)
-	_, err = tryMe.Read(buffer)
+	fileInfo, err := tryMe.Stat()
+	if err != nil {
+		closeErr := tryMe.Close()
+		if closeErr != nil {
+			return fmt.Errorf("failed to close %s after stat error: %w", filename, closeErr)
+		}
 
-	if err != nil && err.Error() == "EOF" {
-		// Empty file, this is fine
-		err = nil
+		return err
+	}
+
+	if fileInfo.IsDir() {
+		closeErr := tryMe.Close()
+		if closeErr != nil {
+			return fmt.Errorf("failed to close directory %s: %w", filename, closeErr)
+		}
+
+		return fmt.Errorf("%s is a directory", filename)
 	}
 
 	closeErr := tryMe.Close()
-	if err == nil && closeErr != nil {
+	if closeErr != nil {
 		// Everything worked up until Close(), report the Close() error
 		return closeErr
 	}
 
-	return err
+	return nil
 }
 
 // From: https://stackoverflow.com/a/52153000/473672
@@ -597,44 +247,6 @@ func countLines(filename string) (uint64, error) {
 	return count, nil
 }
 
-// NewFromFilename creates a new file reader.
-//
-// If options.Lexer is nil it will be determined from the input file name.
-//
-// If options.Style is nil, you must call reader.SetStyleForHighlighting() later
-// to get highlighting.
-//
-// The Reader will try to uncompress various compressed file format, and also
-// apply highlighting to the file using Chroma:
-// https://github.com/alecthomas/chroma
-func NewFromFilename(filename string, formatter chroma.Formatter, options ReaderOptions) (*ReaderImpl, error) {
-	fileError := TryOpen(filename)
-	if fileError != nil {
-		return nil, fileError
-	}
-
-	stream, highlightingFilename, err := ZOpen(filename)
-	if err != nil {
-		return nil, err
-	}
-
-	if options.Lexer == nil {
-		options.Lexer = lexers.Match(highlightingFilename)
-	}
-
-	returnMe := newReaderFromStream(stream, &highlightingFilename, formatter, options)
-
-	if options.Lexer == nil {
-		returnMe.HighlightingDone.Store(true)
-	}
-
-	if options.Style != nil {
-		returnMe.SetStyleForHighlighting(*options.Style)
-	}
-
-	return returnMe, nil
-}
-
 // Wait for reader to finish reading and highlighting. Used by tests.
 func (reader *ReaderImpl) Wait() error {
 	// Wait for our goroutine to finish
@@ -653,107 +265,8 @@ func (reader *ReaderImpl) Wait() error {
 	return reader.Err
 }
 
-func textAsString(reader *ReaderImpl, shouldFormat bool) string {
-	reader.RLock()
-
-	text := strings.Builder{}
-	for _, line := range reader.lines {
-		text.WriteString(line.raw)
-		text.WriteString("\n")
-	}
-	result := text.String()
-	reader.RUnlock()
-
-	var jsonData any
-	err := json.Unmarshal([]byte(result), &jsonData)
-	if err != nil {
-		// Not JSON, return the text as-is
-		return result
-	}
-
-	if !shouldFormat {
-		log.Info("Try the --reformat flag for automatic JSON reformatting")
-		return result
-	}
-
-	// Pretty print the JSON
-	prettyJSON, err := json.MarshalIndent(jsonData, "", "  ")
-	if err != nil {
-		log.Debug("Failed to pretty print JSON: ", err)
-		return result
-	}
-
-	log.Debug("Got the --reformat flag, reformatted JSON input")
-	return string(prettyJSON)
-}
-
-func isXml(text string) bool {
-	err := xml.Unmarshal([]byte(text), new(any))
-	return err == nil
-}
-
-// We expect this to be executed in a goroutine
-func highlightFromMemory(reader *ReaderImpl, formatter chroma.Formatter, options ReaderOptions) {
-	// Is the buffer small enough?
-	var byteCount int64
-	reader.RLock()
-	for _, line := range reader.lines {
-		byteCount += int64(len(line.raw))
-
-		if byteCount > MAX_HIGHLIGHT_SIZE {
-			log.Info("File too large for highlighting: ", byteCount)
-			reader.RUnlock()
-			return
-		}
-	}
-	reader.RUnlock()
-
-	text := textAsString(reader, options.ShouldFormat)
-
-	if len(text) == 0 {
-		log.Debug("Buffer is empty, not highlighting")
-		return
-	}
-
-	if options.Lexer == nil && json.Valid([]byte(text)) {
-		log.Info("Buffer is valid JSON, highlighting as JSON")
-		options.Lexer = lexers.Get("json")
-	} else if options.Lexer == nil && isXml(text) {
-		log.Info("Buffer is valid XML, highlighting as XML")
-		options.Lexer = lexers.Get("xml")
-	}
-
-	if options.Lexer == nil {
-		log.Debug("No lexer set, not highlighting")
-		return
-	}
-
-	if options.Style == nil {
-		log.Debug("No style set, not highlighting")
-		return
-	}
-
-	if formatter == nil {
-		log.Debug("No formatter set, not highlighting")
-		return
-	}
-
-	highlighted, err := Highlight(text, *options.Style, formatter, options.Lexer)
-	if err != nil {
-		log.Warn("Highlighting failed: ", err)
-		return
-	}
-
-	if highlighted == nil {
-		// No highlighting would be done, never mind
-		return
-	}
-
-	reader.setText(*highlighted)
-}
-
 // createStatusUnlocked() assumes that its caller is holding the read lock
-func (reader *ReaderImpl) createStatusUnlocked(lastLine linemetadata.Index) string {
+func (reader *ReaderImpl) createStatusUnlocked(lastLine linemetadata.Index) (string, string) {
 	displayName := ""
 	if reader.DisplayName != nil {
 		displayName = *reader.DisplayName
@@ -762,9 +275,9 @@ func (reader *ReaderImpl) createStatusUnlocked(lastLine linemetadata.Index) stri
 	if len(reader.lines) == 0 {
 		empty := "<empty>"
 		if len(displayName) > 0 {
-			return displayName + ": " + empty
+			return displayName, ": " + empty
 		}
-		return empty
+		return "", empty
 	}
 
 	linesCount := ""
@@ -783,9 +296,6 @@ func (reader *ReaderImpl) createStatusUnlocked(lastLine linemetadata.Index) stri
 	}
 
 	return_me := ""
-	if len(displayName) > 0 {
-		return_me = displayName
-	}
 
 	if len(linesCount) > 0 {
 		if len(displayName) > 0 {
@@ -801,7 +311,11 @@ func (reader *ReaderImpl) createStatusUnlocked(lastLine linemetadata.Index) stri
 		return_me += percent
 	}
 
-	return return_me
+	if len(displayName) > 0 {
+		return displayName, return_me
+	}
+	return "", return_me
+
 }
 
 // Wait for the first line to be read.
@@ -837,102 +351,143 @@ func (reader *ReaderImpl) ShouldShowLineCount() bool {
 
 // GetLine gets a line. If the requested line number is out of bounds, nil is returned.
 func (reader *ReaderImpl) GetLine(index linemetadata.Index) *NumberedLine {
-	reader.Lock()
-	defer reader.Unlock()
+	reader.RLock()
 
 	if index.Index() >= reader.pauseAfterLines-DEFAULT_PAUSE_AFTER_LINES/2 {
+		// Switch to the write lock for changing the pause threshold
+		reader.RUnlock()
+		reader.Lock()
+
 		// Getting close(ish) to the pause threshold, bump it up. The Max()
 		// construct is to handle the case when the add overflows.
 		reader.pauseAfterLines = slices.Max([]int{
 			reader.pauseAfterLines + DEFAULT_PAUSE_AFTER_LINES/2,
 			reader.pauseAfterLines})
+
 		select {
 		case reader.pauseAfterLinesUpdated <- true:
 		default:
 			// Default case required for the write to be non-blocking
 		}
+
+		// Back to read lock for the rest of this function
+		reader.Unlock()
+		reader.RLock()
 	}
 
 	if !index.IsWithinLength(len(reader.lines)) {
+		reader.RUnlock()
 		return nil
 	}
 
-	line := reader.lines[index.Index()]
-	if line.plain == nil {
-		plain := textstyles.WithoutFormatting(line.raw, &index)
-		line.plain = &plain
-	}
+	returnLine := reader.lines[index.Index()]
+	reader.RUnlock()
 
 	return &NumberedLine{
 		Index:  index,
 		Number: linemetadata.NumberFromZeroBased(index.Index()),
-		Line:   line,
+		Line:   returnLine,
 	}
+}
+
+// Given a starting point and a count, return a start and end index that don't
+// exceed maxIndex. On overflow, the requested range will be shifted backwards
+// to fit within maxIndex, and if that's not enough, cut at the end.
+func clipRangeToLength(start linemetadata.Index, wantedCount int, maxIndex int) (int, int) {
+	if wantedCount <= 0 {
+		panic(fmt.Sprintf("wantedCount must be at least 1, was %d", wantedCount))
+	}
+	if maxIndex < 0 {
+		panic(fmt.Sprintf("maxIndex must be at least 0, was %d", maxIndex))
+	}
+
+	first := start.Index()
+
+	// Cap wantedCount to the available length (maxIndex+1).
+	available := maxIndex + 1
+	if wantedCount > available {
+		wantedCount = available
+	}
+
+	// Clamp start so the window fits: start <= maxIndex - (wantedCount - 1)
+	highestStart := maxIndex - (wantedCount - 1)
+	if first > highestStart {
+		first = highestStart
+	}
+	if first < 0 {
+		first = 0
+	}
+
+	last := first + wantedCount - 1
+	if last > maxIndex {
+		last = maxIndex
+	}
+
+	return first, last
 }
 
 // GetLines gets the indicated lines from the input
-//
-//revive:disable-next-line:unexported-return
 func (reader *ReaderImpl) GetLines(firstLine linemetadata.Index, wantedLineCount int) InputLines {
 	reader.RLock()
-	defer reader.RUnlock()
-	return reader.getLinesUnlocked(firstLine, wantedLineCount)
+	lineCount := len(reader.lines)
+	if lineCount == 0 || wantedLineCount == 0 {
+		filenameText, statusText := reader.createStatusUnlocked(firstLine)
+		reader.RUnlock()
+
+		return InputLines{
+			FilenameText: filenameText,
+			StatusText:   statusText,
+		}
+	}
+	reader.RUnlock()
+
+	firstLineIndex, lastLineIndex := clipRangeToLength(firstLine, wantedLineCount, lineCount-1)
+	wantedLineCount = lastLineIndex - firstLineIndex + 1
+
+	resultLines := make([]NumberedLine, 0, wantedLineCount)
+	filenameText, statusText := reader.GetLinesPreallocated(linemetadata.IndexFromZeroBased(firstLineIndex), &resultLines)
+
+	return InputLines{
+		Lines:        resultLines,
+		FilenameText: filenameText,
+		StatusText:   statusText,
+	}
 }
 
-// Assumes the read lock is being held
-func (reader *ReaderImpl) getLinesUnlocked(firstLine linemetadata.Index, wantedLineCount int) InputLines {
-	if len(reader.lines) == 0 || wantedLineCount == 0 {
-		return InputLines{
-			StatusText: reader.createStatusUnlocked(firstLine),
-		}
-	}
+// GetLines gets the indicated lines from the input. The lines will be stored
+// in the provided preallocated slice to avoid allocations. The line count is
+// determined by the capacity of the provided slice.
+//
+// The return value is the status text for the returned lines.
+func (reader *ReaderImpl) GetLinesPreallocated(firstLine linemetadata.Index, resultLines *[]NumberedLine) (string, string) {
+	// Clear the result slice
+	*resultLines = (*resultLines)[:0]
 
-	lastLine := firstLine.NonWrappingAdd(wantedLineCount - 1)
+	reader.RLock()
+
+	if len(reader.lines) == 0 || cap(*resultLines) == 0 {
+		filenameText, statusText := reader.createStatusUnlocked(firstLine)
+		reader.RUnlock()
+
+		return filenameText, statusText
+	}
 
 	// Prevent reading past the end of the available lines
-	maxLineIndex := *linemetadata.IndexFromLength(len(reader.lines))
-	if lastLine.IsAfter(maxLineIndex) {
-		lastLine = maxLineIndex
+	firstLineIndex, lastLineIndex := clipRangeToLength(firstLine, cap(*resultLines), len(reader.lines)-1)
 
-		// If one line was requested, then first and last should be exactly the
-		// same, and we would get there by adding zero.
-		firstLine = lastLine.NonWrappingAdd(1 - wantedLineCount)
+	filenameText, statusText := reader.createStatusUnlocked(linemetadata.IndexFromZeroBased(lastLineIndex))
 
-		return reader.getLinesUnlocked(firstLine, firstLine.CountLinesTo(lastLine))
-	}
-
-	notNumberedReturnLines := reader.lines[firstLine.Index() : lastLine.Index()+1]
-	returnLines := make([]NumberedLine, 0, len(notNumberedReturnLines))
-	for loopIndex, line := range notNumberedReturnLines {
-		lineIndex := firstLine.NonWrappingAdd(loopIndex)
-		returnLine := reader.lines[lineIndex.Index()]
-		if line.plain == nil {
-			// Plaining is slow, release the lock while doing it
-			reader.RUnlock()
-
-			// Holding no locks, do the slow work
-			plain := textstyles.WithoutFormatting(line.raw, &lineIndex)
-
-			// Update the reader, needs the write lock
-			reader.Lock()
-			line.plain = &plain
-			reader.Unlock()
-
-			// Reacquire the read lock for the next loop iteration
-			reader.RLock()
-		}
-
-		returnLines = append(returnLines, NumberedLine{
-			Index:  lineIndex,
-			Number: linemetadata.NumberFromZeroBased(lineIndex.Index()),
+	for loopIndex, returnLine := range reader.lines[firstLineIndex : lastLineIndex+1] {
+		*resultLines = append(*resultLines, NumberedLine{
+			Index:  linemetadata.IndexFromZeroBased(firstLineIndex + loopIndex),
+			Number: linemetadata.NumberFromZeroBased(firstLineIndex + loopIndex),
 			Line:   returnLine,
 		})
 	}
 
-	return InputLines{
-		Lines:      returnLines,
-		StatusText: reader.createStatusUnlocked(lastLine),
-	}
+	reader.RUnlock()
+
+	return filenameText, statusText
 }
 
 func (reader *ReaderImpl) PumpToStdout() {
@@ -954,7 +509,7 @@ func (reader *ReaderImpl) PumpToStdout() {
 				continue
 			}
 
-			fmt.Println(line.Line.raw)
+			fmt.Println(string(line.Line.raw))
 			printed = true
 			firstNotPrintedLine = lineIndex.NonWrappingAdd(1)
 		}
@@ -989,7 +544,7 @@ func (reader *ReaderImpl) PumpToStdout() {
 func (reader *ReaderImpl) setText(text string) {
 	lines := []*Line{}
 	for _, lineString := range strings.Split(text, "\n") {
-		line := NewLine(lineString)
+		line := Line{raw: []byte(lineString)}
 		lines = append(lines, &line)
 	}
 
@@ -1043,4 +598,12 @@ func (reader *ReaderImpl) SetPauseAfterLines(lines int) {
 
 func (reader *ReaderImpl) SetStyleForHighlighting(style chroma.Style) {
 	reader.highlightingStyle <- style
+}
+
+// Close stops background routines and prevents further reading.
+func (reader *ReaderImpl) Close() {
+	reader.closed.Store(true)
+
+	// Unblock any active pause
+	reader.SetPauseAfterLines(math.MaxInt)
 }

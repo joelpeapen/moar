@@ -44,6 +44,8 @@ func getTestFiles(t *testing.T) []string {
 // Verify that we can tokenize all lines in ../sample-files/*
 // without logging any errors
 func TestTokenize(t *testing.T) {
+	log.SetLevel(log.DebugLevel)
+
 	for _, fileName := range getTestFiles(t) {
 		t.Run(fileName, func(t *testing.T) {
 			file, err := os.Open(fileName)
@@ -79,8 +81,8 @@ func TestTokenize(t *testing.T) {
 				var loglines strings.Builder
 				log.SetOutput(&loglines)
 
-				tokens := StyledRunesFromString(twin.StyleDefault, line, lineIndex).StyledRunes
-				plainString := WithoutFormatting(line, lineIndex)
+				tokens := StyledRunesFromString(twin.StyleDefault, line, lineIndex, 0).StyledRunes
+				plainString := StripFormatting(line, *lineIndex)
 				if len(tokens) != utf8.RuneCountInString(plainString) {
 					t.Errorf("%s:%s: len(tokens)=%d, len(plainString)=%d for: <%s>",
 						fileName, lineIndex.Format(),
@@ -131,24 +133,47 @@ func TestTokenize(t *testing.T) {
 	}
 }
 
-func TestUnderline(t *testing.T) {
-	tokens := StyledRunesFromString(twin.StyleDefault, "a\x1b[4mb\x1b[24mc", nil).StyledRunes
-	assert.Equal(t, len(tokens), 3)
-	assert.Equal(t, tokens[0], CellWithMetadata{Rune: 'a', Style: twin.StyleDefault})
-	assert.Equal(t, tokens[1], CellWithMetadata{Rune: 'b', Style: twin.StyleDefault.WithAttr(twin.AttrUnderline)})
-	assert.Equal(t, tokens[2], CellWithMetadata{Rune: 'c', Style: twin.StyleDefault})
+func TestAllSupportedTextAttributes(t *testing.T) {
+	testCases := []struct {
+		name    string
+		onCode  string
+		offCode string
+		attr    twin.AttrMask
+	}{
+		{name: "bold", onCode: "1", offCode: "22", attr: twin.AttrBold},
+		{name: "dim", onCode: "2", offCode: "22", attr: twin.AttrDim},
+		{name: "italic", onCode: "3", offCode: "23", attr: twin.AttrItalic},
+		{name: "underline", onCode: "4", offCode: "24", attr: twin.AttrUnderline},
+		{name: "blink", onCode: "5", offCode: "25", attr: twin.AttrBlink},
+		{name: "reverse", onCode: "7", offCode: "27", attr: twin.AttrReverse},
+		{name: "hidden", onCode: "8", offCode: "28", attr: twin.AttrHidden},
+		{name: "strikethrough", onCode: "9", offCode: "29", attr: twin.AttrStrikeThrough},
+	}
+
+	for _, testCase := range testCases {
+		tc := testCase
+		t.Run(tc.name, func(t *testing.T) {
+			input := "a\x1b[" + tc.onCode + "mb\x1b[" + tc.offCode + "mc"
+			tokens := StyledRunesFromString(twin.StyleDefault, input, nil, 0).StyledRunes
+
+			assert.Equal(t, len(tokens), 3)
+			assert.Equal(t, tokens[0], CellWithMetadata{Rune: 'a', Style: twin.StyleDefault})
+			assert.Equal(t, tokens[1], CellWithMetadata{Rune: 'b', Style: twin.StyleDefault.WithAttr(tc.attr)})
+			assert.Equal(t, tokens[2], CellWithMetadata{Rune: 'c', Style: twin.StyleDefault})
+		})
+	}
 }
 
 func TestManPages(t *testing.T) {
 	// Bold
-	tokens := StyledRunesFromString(twin.StyleDefault, "ab\bbc", nil).StyledRunes
+	tokens := StyledRunesFromString(twin.StyleDefault, "ab\bbc", nil, 0).StyledRunes
 	assert.Equal(t, len(tokens), 3)
 	assert.Equal(t, tokens[0], CellWithMetadata{Rune: 'a', Style: twin.StyleDefault})
 	assert.Equal(t, tokens[1], CellWithMetadata{Rune: 'b', Style: twin.StyleDefault.WithAttr(twin.AttrBold)})
 	assert.Equal(t, tokens[2], CellWithMetadata{Rune: 'c', Style: twin.StyleDefault})
 
 	// Underline
-	tokens = StyledRunesFromString(twin.StyleDefault, "a_\bbc", nil).StyledRunes
+	tokens = StyledRunesFromString(twin.StyleDefault, "a_\bbc", nil, 0).StyledRunes
 	assert.Equal(t, len(tokens), 3)
 	assert.Equal(t, tokens[0], CellWithMetadata{Rune: 'a', Style: twin.StyleDefault})
 	assert.Equal(t, tokens[1], CellWithMetadata{Rune: 'b', Style: twin.StyleDefault.WithAttr(twin.AttrUnderline)})
@@ -156,7 +181,7 @@ func TestManPages(t *testing.T) {
 
 	// Bullet point 1, taken from doing this on my macOS system:
 	// env PAGER="hexdump -C" man printf | moor
-	tokens = StyledRunesFromString(twin.StyleDefault, "a+\b+\bo\bob", nil).StyledRunes
+	tokens = StyledRunesFromString(twin.StyleDefault, "a+\b+\bo\bob", nil, 0).StyledRunes
 	assert.Equal(t, len(tokens), 3)
 	assert.Equal(t, tokens[0], CellWithMetadata{Rune: 'a', Style: twin.StyleDefault})
 	assert.Equal(t, tokens[1], CellWithMetadata{Rune: '•', Style: twin.StyleDefault})
@@ -164,7 +189,7 @@ func TestManPages(t *testing.T) {
 
 	// Bullet point 2, taken from doing this using the "fish" shell on my macOS system:
 	// man printf | hexdump -C | moor
-	tokens = StyledRunesFromString(twin.StyleDefault, "a+\bob", nil).StyledRunes
+	tokens = StyledRunesFromString(twin.StyleDefault, "a+\bob", nil, 0).StyledRunes
 	assert.Equal(t, len(tokens), 3)
 	assert.Equal(t, tokens[0], CellWithMetadata{Rune: 'a', Style: twin.StyleDefault})
 	assert.Equal(t, tokens[1], CellWithMetadata{Rune: '•', Style: twin.StyleDefault})
@@ -186,18 +211,18 @@ func TestManPageHeadings(t *testing.T) {
 	}
 
 	// A line with only man page bold caps should be considered a heading
-	for _, token := range StyledRunesFromString(twin.StyleDefault, manPageHeading, nil).StyledRunes {
+	for _, token := range StyledRunesFromString(twin.StyleDefault, manPageHeading, nil, 0).StyledRunes {
 		assert.Equal(t, token.Style, ManPageHeading)
 	}
 
 	// A line with only non-man-page bold caps should not be considered a heading
 	wrongKindOfBold := "\x1b[1mJOHAN HELLO"
-	for _, token := range StyledRunesFromString(twin.StyleDefault, wrongKindOfBold, nil).StyledRunes {
+	for _, token := range StyledRunesFromString(twin.StyleDefault, wrongKindOfBold, nil, 0).StyledRunes {
 		assert.Equal(t, token.Style, twin.StyleDefault.WithAttr(twin.AttrBold))
 	}
 
 	// A line with not all caps should not be considered a heading
-	for _, token := range StyledRunesFromString(twin.StyleDefault, notAllCaps, nil).StyledRunes {
+	for _, token := range StyledRunesFromString(twin.StyleDefault, notAllCaps, nil, 0).StyledRunes {
 		assert.Equal(t, token.Style, twin.StyleDefault.WithAttr(twin.AttrBold))
 	}
 }
@@ -262,7 +287,7 @@ func TestRawUpdateStyle(t *testing.T) {
 func TestHyperlink_escBackslash(t *testing.T) {
 	url := "http://example.com"
 
-	tokens := StyledRunesFromString(twin.StyleDefault, "a\x1b]8;;"+url+"\x1b\\bc\x1b]8;;\x1b\\d", nil).StyledRunes
+	tokens := StyledRunesFromString(twin.StyleDefault, "a\x1b]8;;"+url+"\x1b\\bc\x1b]8;;\x1b\\d", nil, 0).StyledRunes
 
 	assert.DeepEqual(t, tokens, []CellWithMetadata{
 		{Rune: 'a', Style: twin.StyleDefault},
@@ -279,7 +304,7 @@ func TestHyperlink_escBackslash(t *testing.T) {
 func TestHyperlink_bell(t *testing.T) {
 	url := "http://example.com"
 
-	tokens := StyledRunesFromString(twin.StyleDefault, "a\x1b]8;;"+url+"\x07bc\x1b]8;;\x07d", nil).StyledRunes
+	tokens := StyledRunesFromString(twin.StyleDefault, "a\x1b]8;;"+url+"\x07bc\x1b]8;;\x07d", nil, 0).StyledRunes
 
 	assert.DeepEqual(t, tokens, []CellWithMetadata{
 		{Rune: 'a', Style: twin.StyleDefault},
@@ -293,7 +318,7 @@ func TestHyperlink_bell(t *testing.T) {
 // Test with some other ESC sequence than ESC-backslash
 func TestHyperlink_nonTerminatingEsc(t *testing.T) {
 	complete := "a\x1b]8;;https://example.com\x1bbc"
-	tokens := StyledRunesFromString(twin.StyleDefault, complete, nil).StyledRunes
+	tokens := StyledRunesFromString(twin.StyleDefault, complete, nil, 0).StyledRunes
 
 	// This should not be treated as any link
 	for i := 0; i < len(complete); i++ {
@@ -313,7 +338,7 @@ func TestHyperlink_incomplete(t *testing.T) {
 	for l := len(complete) - 1; l >= 0; l-- {
 		incomplete := complete[:l]
 		t.Run(fmt.Sprintf("l=%d incomplete=<%s>", l, strings.ReplaceAll(incomplete, "\x1b", "ESC")), func(t *testing.T) {
-			tokens := StyledRunesFromString(twin.StyleDefault, incomplete, nil).StyledRunes
+			tokens := StyledRunesFromString(twin.StyleDefault, incomplete, nil, 0).StyledRunes
 
 			for i := 0; i < l; i++ {
 				if complete[i] == '\x1b' {
@@ -336,4 +361,75 @@ func TestRawUpdateStyleResetDoesNotAffectHyperlink(t *testing.T) {
 	assert.NilError(t, err)
 	assert.Assert(t, updated.HyperlinkURL() != nil)
 	assert.Equal(t, *updated.HyperlinkURL(), url)
+}
+
+// Ref: https://github.com/walles/moor/issues/372
+func TestIssue372(t *testing.T) {
+	const maxTokensCount = 10
+
+	// Load test data once
+	data, err := os.ReadFile(path.Join(samplesDir, "issue-372.txt"))
+	assert.NilError(t, err)
+
+	// Expect one newline terminated line
+	lines := strings.Split(string(data), "\n")
+	assert.Equal(t, 2, len(lines))
+	assert.Equal(t, 0, len(lines[1]))
+
+	styled := StyledRunesFromString(twin.StyleDefault, lines[0], nil, maxTokensCount).StyledRunes
+	assert.Equal(t, len(styled), maxTokensCount)
+}
+
+// Benchmark stripping formatting from a colored git diff sample.
+// To run:
+//
+//	go test -bench=BenchmarkStripFormatting -benchmem ./...
+func BenchmarkStripFormatting(b *testing.B) {
+	// Load sample input once
+	data, err := os.ReadFile(path.Join(samplesDir, "gitdiff-color.txt"))
+	if err != nil {
+		b.Fatalf("read sample: %v", err)
+	}
+
+	lines := strings.Split(string(data), "\n")
+	// Set processed bytes per iteration
+	b.SetBytes(int64(len(data)))
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		for _, line := range lines {
+			// We ignore the output; benchmarking execution time only
+			_ = StripFormatting(line, linemetadata.Index{})
+		}
+	}
+}
+
+// Benchmark stripping formatting from a colored git diff sample.
+// To run:
+//
+//	go test -bench=BenchmarkStripFormattingUnformattedInput -benchmem ./...
+func BenchmarkStripFormattingUnformattedInput(b *testing.B) {
+	// Load sample input once
+	data, err := os.ReadFile(path.Join(samplesDir, "gitdiff-color.txt"))
+	if err != nil {
+		b.Fatalf("read sample: %v", err)
+	}
+
+	// Remove formatting before benchmarking
+	var unformatted strings.Builder
+	formattedLines := strings.Split(string(data), "\n")
+	for _, line := range formattedLines {
+		unformatted.WriteString(StripFormatting(line, linemetadata.Index{}))
+		unformatted.WriteString("\n")
+	}
+
+	lines := strings.Split(unformatted.String(), "\n")
+	// Set processed bytes per iteration
+	b.SetBytes(int64(len(unformatted.String())))
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		for _, line := range lines {
+			// We ignore the output; benchmarking execution time only
+			_ = StripFormatting(line, linemetadata.Index{})
+		}
+	}
 }

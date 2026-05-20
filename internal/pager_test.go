@@ -1,6 +1,7 @@
 package internal
 
 import (
+	"fmt"
 	"os"
 	"path"
 	"runtime"
@@ -41,6 +42,8 @@ func TestUnicodeRendering(t *testing.T) {
 }
 
 func assertRunesEqual(t *testing.T, expected twin.StyledRune, actual twin.StyledRune) {
+	t.Helper()
+
 	if actual.Rune == expected.Rune && actual.Style == expected.Style {
 		return
 	}
@@ -97,16 +100,24 @@ func TestBrokenUtf8(t *testing.T) {
 
 func startPaging(t *testing.T, reader *reader.ReaderImpl) *twin.FakeScreen {
 	// 0 means default tab size. Defaults to 4
-	return startPagingWithTabSize(t, 0, reader)
+	return startPagingWithTabSizeAndScreen(t, 0, twin.NewFakeScreen(20, 10), reader)
 }
 
 func startPagingWithTabSize(t *testing.T, tabSize int, reader *reader.ReaderImpl) *twin.FakeScreen {
+	return startPagingWithTabSizeAndScreen(t, tabSize, twin.NewFakeScreen(20, 10), reader)
+}
+
+func startPagingWithScreen(t *testing.T, screen *twin.FakeScreen, reader *reader.ReaderImpl) *twin.FakeScreen {
+	// 0 means default tab size. Defaults to 4
+	return startPagingWithTabSizeAndScreen(t, 0, screen, reader)
+}
+
+func startPagingWithTabSizeAndScreen(t *testing.T, tabSize int, screen *twin.FakeScreen, reader *reader.ReaderImpl) *twin.FakeScreen {
 	err := reader.Wait()
 	if err != nil {
 		t.Fatalf("Failed waiting for reader: %v", err)
 	}
 
-	screen := twin.NewFakeScreen(20, 10)
 	pager := NewPager(reader)
 	pager.TabSize = tabSize
 	pager.ShowLineNumbers = false
@@ -299,6 +310,8 @@ func resetManPageFormat() {
 }
 
 func testManPageFormatting(t *testing.T, input string, expected twin.StyledRune) {
+	t.Helper()
+
 	reader := reader.NewFromTextForTesting("", input)
 
 	// Without these lines the man page tests will fail if either of these
@@ -326,26 +339,6 @@ func TestManPageFormatting(t *testing.T) {
 	// FIXME: Test two consecutive backspaces
 
 	// FIXME: Test backspace between two uncombinable characters
-}
-
-func TestToPattern(t *testing.T) {
-	assert.Assert(t, toPattern("") == nil)
-
-	// Test regexp matching
-	assert.Assert(t, toPattern("G.*S").MatchString("GRIIIS"))
-	assert.Assert(t, !toPattern("G.*S").MatchString("gRIIIS"))
-
-	// Test case insensitive regexp matching
-	assert.Assert(t, toPattern("g.*s").MatchString("GRIIIS"))
-	assert.Assert(t, toPattern("g.*s").MatchString("gRIIIS"))
-
-	// Test non-regexp matching
-	assert.Assert(t, toPattern(")G").MatchString(")G"))
-	assert.Assert(t, !toPattern(")G").MatchString(")g"))
-
-	// Test case insensitive non-regexp matching
-	assert.Assert(t, toPattern(")g").MatchString(")G"))
-	assert.Assert(t, toPattern(")g").MatchString(")g"))
 }
 
 func TestScrollToBottomWrapNextToLastLine(t *testing.T) {
@@ -529,11 +522,6 @@ func TestPageSamples(t *testing.T) {
 				t.Errorf("Error opening file <%s>: %s", fileName, err.Error())
 				return
 			}
-			defer func() {
-				if err := file.Close(); err != nil {
-					panic(err)
-				}
-			}()
 
 			myReader, err := reader.NewFromStream(fileName, file, nil, reader.ReaderOptions{Style: &chroma.Style{}})
 			assert.NilError(t, err)
@@ -672,4 +660,43 @@ func TestTerminalFg(t *testing.T) {
 
 	assertRunesEqual(t, styleAnswer, startPagingWithTerminalFg(t, reader, false).GetRow(0)[0])
 	assertRunesEqual(t, terminalAnswer, startPagingWithTerminalFg(t, reader, true).GetRow(0)[0])
+}
+
+func testFooter(t *testing.T, filename string, contents string, expectedFooter string) {
+	reader := reader.NewFromTextForTesting(filename, contents)
+	screen := startPagingWithScreen(t, twin.NewFakeScreen(999, 10), reader)
+	footer := rowToString(screen.GetRow(9))
+	assert.Equal(t, expectedFooter, footer, fmt.Sprintf("filename='%s', contents='%s'", filename, contents))
+}
+
+func TestFooter(t *testing.T) {
+	help := "Press ESC / q to exit, / to search, & to filter, h for help"
+
+	testFooter(t, "filename", "", "filename: <empty>  "+help)
+	testFooter(t, "", "", "<empty>  "+help)
+	testFooter(t, "", "text", "1 line  100%  "+help)
+	testFooter(t, "filename", "text", "filename: 1 line  100%  "+help)
+
+	testFooter(t, "", "line 1\nline 2", "2 lines  100%  "+help)
+}
+
+// Regression test for crash when following an empty file.
+// Before the fix, IndexFromLength(0) would return nil, and calling .IsBefore()
+// on nil would crash.
+func TestHandleMoreLinesAvailableWithEmptyFile(t *testing.T) {
+	// Create a pager with an empty reader
+	emptyReader := reader.NewFromTextForTesting("empty", "")
+	pager := NewPager(emptyReader)
+
+	// Simulate --follow mode by setting target to max
+	targetLine := linemetadata.IndexMax()
+	pager.TargetLine = &targetLine
+
+	// This should not crash when lineCount is 0
+	pager.handleMoreLinesAvailable()
+
+	// Verify target line is still set (we're still waiting for lines)
+	if pager.TargetLine == nil {
+		t.Error("Expected TargetLine to remain set when no lines available")
+	}
 }

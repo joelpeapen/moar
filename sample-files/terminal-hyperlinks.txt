@@ -7,3 +7,13 @@ It can also come with a \a (bell) as a terminator. This is recommended against
 at the above URL, but we do need to support it.
 
 ]8;;http://example.comThis is a link]8;;
+
+Links can also include parameters. The most common is the "id" parameter which is
+used for hover underlining to keep visually separated parts of the same link together.
+
+]8;id=link123;http://example.com\This link has an id parameter]8;;\
+
+Links can have multiple parameters, separated by colons. Even unknown parameters should
+not cause issues:
+
+]8;id=link456:custom=value;http://example.com\This link has id and unknown parameters]8;;\

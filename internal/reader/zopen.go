@@ -26,6 +26,13 @@ func ZOpen(filename string) (io.ReadCloser, string, error) {
 		return nil, "", err
 	}
 
+	_, err = file.Seek(0, 0)
+	if err != nil {
+		// File is not seekable, so we can't probe its contents.
+		// https://github.com/walles/moor/issues/385
+		return file, filename, nil
+	}
+
 	// Read the first 6 bytes to determine the compression type
 	firstBytes := make([]byte, 6)
 	_, err = file.Read(firstBytes)
@@ -54,11 +61,14 @@ func ZOpen(filename string) (io.ReadCloser, string, error) {
 		newName := strings.TrimSuffix(filename, ".gz")
 
 		// Ref: https://github.com/walles/moor/issues/194
-		if strings.HasSuffix(newName, ".tgz") {
-			newName = strings.TrimSuffix(newName, ".tgz") + ".tar"
+		if before, ok := strings.CutSuffix(newName, ".tgz"); ok {
+			newName = before + ".tar"
 		}
 
-		return reader, newName, err
+		return struct {
+			io.Reader
+			io.Closer
+		}{reader, file}, newName, err
 
 	case bytes.HasPrefix(firstBytes, bzip2Magic):
 		log.Debugf("File is bzip2 compressed: %v", filename)

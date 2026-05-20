@@ -17,7 +17,7 @@ func TestNotFoundFindPrevious(t *testing.T) {
 	assert.NilError(t, reader.Wait())
 
 	// Look for a hit on the second line
-	pager.searchPattern = toPattern("bepa")
+	pager.search.For("bepa")
 
 	// Press 'p' to find the previous hit
 	pager.mode = PagerModeNotFound{pager: pager}
@@ -36,7 +36,7 @@ func TestWrapSearchBackwards(t *testing.T) {
 	assert.NilError(t, reader.Wait())
 
 	// Looking for this should take us to the last line
-	pager.searchPattern = toPattern("gold")
+	pager.search.For("gold")
 
 	// Press 'p' to find the previous hit
 	pager.mode = PagerModeNotFound{pager: pager}

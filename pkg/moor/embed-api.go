@@ -46,6 +46,11 @@ type Options struct {
 	QuitIfOneScreen bool
 }
 
+// PageFromStream reads the contents of the given reader and presents it in a pager.
+//
+// Note that if the provided reader implements io.Closer, it will be closed
+// automatically once the pager has finished reading from it or when the pager exits.
+//
 // If stdout is not a terminal, the stream contents will just be printed to
 // stdout.
 func PageFromStream(reader io.Reader, options Options) error {

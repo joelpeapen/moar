@@ -23,6 +23,7 @@ import (
 	"github.com/walles/moor/v2/internal/linemetadata"
 	"github.com/walles/moor/v2/internal/reader"
 	"github.com/walles/moor/v2/internal/textstyles"
+	"github.com/walles/moor/v2/internal/util"
 	"github.com/walles/moor/v2/twin"
 )
 
@@ -56,11 +57,6 @@ func printProblemsHeader() {
 	fmt.Fprintln(os.Stderr, "Version      :", getVersion())
 	fmt.Fprintln(os.Stderr, "LANG         :", os.Getenv("LANG"))
 	fmt.Fprintln(os.Stderr, "TERM         :", os.Getenv("TERM"))
-	if moorEnvVarName() == "MOAR" {
-		fmt.Fprintln(os.Stderr, "MOAR (legacy):", os.Getenv("MOAR"))
-	} else {
-		fmt.Fprintln(os.Stderr, "MOOR         :", os.Getenv("MOOR"))
-	}
 	fmt.Fprintln(os.Stderr, "EDITOR       :", os.Getenv("EDITOR"))
 	fmt.Fprintln(os.Stderr, "TERM_PROGRAM :", os.Getenv("TERM_PROGRAM"))
 	fmt.Fprintln(os.Stderr)
@@ -90,6 +86,14 @@ func printProblemsHeader() {
 	fmt.Fprintln(os.Stderr)
 	fmt.Fprintln(os.Stderr, "Stdin  is a terminal:", term.IsTerminal(int(os.Stdin.Fd())))
 	fmt.Fprintln(os.Stderr, "Stdout is a terminal:", term.IsTerminal(int(os.Stdout.Fd())))
+	fmt.Fprintln(os.Stderr)
+
+	if moorEnvVarName() == "MOAR" {
+		fmt.Fprintln(os.Stderr, "MOAR (legacy):", os.Getenv("MOAR"))
+	} else {
+		fmt.Fprintln(os.Stderr, "MOOR:", os.Getenv("MOOR"))
+	}
+	fmt.Fprintf(os.Stderr, "Commandline: %#v\n", os.Args)
 }
 
 func parseLexerOption(lexerOption string) (chroma.Lexer, error) {
@@ -170,8 +174,8 @@ func parseUnprintableStyle(styleOption string) (textstyles.UnprintableStyleT, er
 
 func parseScrollHint(scrollHint string) (textstyles.CellWithMetadata, error) {
 	scrollHint = strings.ReplaceAll(scrollHint, "ESC", "\x1b")
-	hintAsLine := reader.NewLine(scrollHint)
-	parsedTokens := hintAsLine.HighlightedTokens(twin.StyleDefault, twin.StyleDefault, nil, nil).StyledRunes
+
+	parsedTokens := textstyles.StyledRunesFromString(twin.StyleDefault, scrollHint, nil, 0).StyledRunes
 	if len(parsedTokens) == 1 {
 		return parsedTokens[0], nil
 	}
@@ -649,6 +653,7 @@ func main() {
 	var loglines internal.LogWriter
 	logsRequested := false
 	log.SetOutput(&loglines)
+	twin.SetLogger(&util.TwinLogger{})
 	russiaNotSupported()
 
 	defer func() {
@@ -669,7 +674,7 @@ func main() {
 
 		if err != nil {
 			fmt.Fprintln(os.Stderr)
-			fmt.Fprintln(os.Stderr, "Panic recovery timestamp:", time.Now())
+			fmt.Fprintln(os.Stderr, "Panic recovery timestamp:", time.Now().String())
 			fmt.Fprintln(os.Stderr)
 			panic(err)
 		}
@@ -721,24 +726,24 @@ func flagSetFunc[T any](flagSet *flag.FlagSet, name string, defaultValue T, usag
 
 func startPaging(pager *internal.Pager, screen twin.Screen, chromaStyle *chroma.Style, chromaFormatter *chroma.Formatter) {
 	defer func() {
+		panicMessage := recover()
+		if panicMessage != nil {
+			// Clarify that any screen shutdown logs are from panic handling,
+			// not something the user or some external thing did.
+			log.Info("Panic detected, closing screen before informing the user...")
+		}
+
 		// Restore screen...
 		screen.Close()
 
 		// ... before printing any panic() output, otherwise the output will
 		// have broken linefeeds and be hard to follow.
-		if err := recover(); err != nil {
-			panic(err)
+		if panicMessage != nil {
+			panic(panicMessage)
 		}
 
 		if !pager.DeInit {
 			pager.ReprintAfterExit()
-		}
-
-		if pager.AfterExit != nil {
-			err := pager.AfterExit()
-			if err != nil {
-				log.Error("Failed running AfterExit hook: ", err)
-			}
 		}
 	}()
 

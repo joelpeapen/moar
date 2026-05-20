@@ -11,7 +11,7 @@ type FakeScreen struct {
 
 func NewFakeScreen(width int, height int) *FakeScreen {
 	rows := make([][]StyledRune, height)
-	for i := 0; i < height; i++ {
+	for i := range height {
 		rows[i] = make([]StyledRune, width)
 	}
 
@@ -32,15 +32,15 @@ func (screen *FakeScreen) Clear() {
 	empty := NewStyledRune(' ', StyleDefault)
 
 	width, height := screen.Size()
-	for row := 0; row < height; row++ {
-		for column := 0; column < width; column++ {
+	for row := range height {
+		for column := range width {
 			screen.cells[row][column] = empty
 		}
 	}
 }
 
 func (screen *FakeScreen) SetCell(column int, row int, styledRune StyledRune) int {
-	// This method's contents has been copied from UnixScreen.Clear()
+	// This method's contents has been copied from UnixScreen.SetCell()
 
 	if column < 0 {
 		return styledRune.Width()
@@ -68,6 +68,27 @@ func (screen *FakeScreen) SetCell(column int, row int, styledRune StyledRune) in
 	return styledRune.Width()
 }
 
+func (screen *FakeScreen) GetCell(column int, row int) StyledRune {
+	// This method's contents has been copied from UnixScreen.GetCell()
+
+	if column < 0 {
+		return NewStyledRune(' ', StyleDefault)
+	}
+	if row < 0 {
+		return NewStyledRune(' ', StyleDefault)
+	}
+
+	width, height := screen.Size()
+	if column >= width {
+		return NewStyledRune(' ', StyleDefault)
+	}
+	if row >= height {
+		return NewStyledRune(' ', StyleDefault)
+	}
+
+	return screen.cells[row][column]
+}
+
 func (screen *FakeScreen) Show() {
 	// This method intentionally left blank
 }
@@ -88,10 +109,6 @@ func (screen *FakeScreen) TerminalBackground() *Color {
 	return nil
 }
 
-func (screen *FakeScreen) ShowCursorAt(_ int, _ int) {
-	// This method intentionally left blank
-}
-
 func (screen *FakeScreen) Events() chan Event {
 	// TODO: Do better here if or when this becomes a problem
 	return nil
@@ -99,4 +116,10 @@ func (screen *FakeScreen) Events() chan Event {
 
 func (screen *FakeScreen) GetRow(row int) []StyledRune {
 	return withoutHiddenRunes(screen.cells[row])
+}
+
+func (screen *FakeScreen) PauseAndCall(run func() error) error {
+	// The fake screen doesn't have any special state to save and restore, just
+	// run it.
+	return run()
 }

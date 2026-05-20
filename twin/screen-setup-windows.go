@@ -4,66 +4,90 @@ package twin
 
 import (
 	"fmt"
-	"io"
 	"os"
 	"runtime/debug"
-	"sync/atomic"
 	"syscall"
 	"time"
+	"unsafe"
 
-	log "github.com/sirupsen/logrus"
 	"golang.org/x/sys/windows"
 	"golang.org/x/term"
 )
 
-// NOTE: Karma points for replacing TestInterruptableReader_blockedOnRead() with
-// TestInterruptableReader_blockedOnReadImmediate() and fixing the Windows
-// implementation here so that the tests pass.
+var peekNamedPipe = windows.NewLazySystemDLL("kernel32.dll").NewProc("PeekNamedPipe")
 
-type interruptableReaderImpl struct {
-	base              *os.File
-	shutdownRequested atomic.Bool
-}
-
-// NOTE: To work properly, this Read() should return immediately after somebody
-// calls Interrupt(), *without first reading any bytes from the base reader*.
-//
-// This implementation doesn't do that. If you want to fix this, the not-Windows
-// implementation in screen-setup.go may or may not work as inspiration.
-func (r *interruptableReaderImpl) Read(p []byte) (n int, err error) {
-	if r.shutdownRequested.Load() {
-		err = io.EOF
-		return
+func waitForPipeReadReady(handle windows.Handle) (ready bool, err error) {
+	var bytesAvailable uint32
+	result, _, callErr := peekNamedPipe.Call(
+		uintptr(handle),
+		0,
+		0,
+		0,
+		uintptr(unsafe.Pointer(&bytesAvailable)),
+		0,
+	)
+	if result != 0 {
+		return bytesAvailable > 0, nil
 	}
 
-	n, err = r.base.Read(p)
+	if callErr == windows.ERROR_BROKEN_PIPE {
+		// Writer closed: let a real Read() return EOF.
+		return true, nil
+	}
+
+	if callErr == windows.ERROR_NO_DATA {
+		// Pipe has no data right now.
+		return false, nil
+	}
+
+	if callErr == windows.ERROR_HANDLE_EOF {
+		return true, nil
+	}
+
+	return false, fmt.Errorf("PeekNamedPipe failed: %w", callErr)
+}
+
+func (r *interruptableReader) waitForReadReady(timeout time.Duration) (ready bool, err error) {
+	fileType, err := windows.GetFileType(windows.Handle(r.base.Fd()))
 	if err != nil {
+		return false, err
+	}
+
+	if fileType == windows.FILE_TYPE_PIPE {
+		ready, err = waitForPipeReadReady(windows.Handle(r.base.Fd()))
+		if ready || err != nil {
+			return
+		}
+
+		time.Sleep(timeout / 2)
+		ready, err = waitForPipeReadReady(windows.Handle(r.base.Fd()))
+		if ready || err != nil {
+			return
+		}
+
+		time.Sleep(timeout / 2)
 		return
 	}
 
-	if r.shutdownRequested.Load() {
-		err = io.EOF
-		n = 0
+	timeoutMillis := uint32(timeout.Milliseconds())
+	if timeoutMillis == 0 {
+		timeoutMillis = 1
 	}
-	return
-}
 
-func (r *interruptableReaderImpl) Interrupt() {
-	// Previously we used to close the screen.ttyIn file descriptor here, but:
-	// * That didn't interrupt the blocking read() in the main loop
-	// * It may or may not have caused shutdown issues on Windows
-	//
-	// Setting this flag doesn't interrupt the blocking read() either, but it
-	// should at least not cause any shutdown issues on Windows.
-	//
-	// Ref:
-	// * https://github.com/walles/moor/issues/217
-	// * https://github.com/walles/moor/issues/221
-	r.shutdownRequested.Store(true)
-}
+	waitResult, err := windows.WaitForSingleObject(windows.Handle(r.base.Fd()), timeoutMillis)
+	if err != nil {
+		return false, err
+	}
 
-func newInterruptableReader(base *os.File) (interruptableReader, error) {
-	return &interruptableReaderImpl{base: base}, nil
+	if waitResult == uint32(windows.WAIT_OBJECT_0) {
+		return true, nil
+	}
+
+	if waitResult == uint32(windows.WAIT_TIMEOUT) {
+		return false, nil
+	}
+
+	return false, fmt.Errorf("unexpected WaitForSingleObject result: %d", waitResult)
 }
 
 // Poll for terminal size changes. No SIGWINCH on Windows, this is apparently
@@ -83,7 +107,7 @@ func (screen *UnixScreen) setupSigwinchNotification() {
 
 			width, height, err := term.GetSize(int(screen.ttyOut.Fd()))
 			if err != nil {
-				log.Debug("Failed to get terminal size: ", err)
+				log.Debug(fmt.Sprint("Failed to get terminal size: ", err))
 				continue
 			}
 
@@ -143,13 +167,13 @@ func (screen *UnixScreen) setupTtyInTtyOut() error {
 	if err != nil {
 		return err
 	}
-	log.Info("ttyin terminal state: ", fmt.Sprintf("%+v", ttyInTerminalState))
+	log.Info(fmt.Sprintf("ttyin terminal state: %+v", ttyInTerminalState))
 
 	ttyOutTerminalState, err := term.GetState(int(screen.ttyOut.Fd()))
 	if err != nil {
 		return err
 	}
-	log.Info("ttyout terminal state: ", fmt.Sprintf("%+v", ttyOutTerminalState))
+	log.Info(fmt.Sprintf("ttyout terminal state: %+v", ttyOutTerminalState))
 
 	return nil
 }

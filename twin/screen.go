@@ -12,7 +12,6 @@ import (
 	"time"
 	"unicode/utf8"
 
-	log "github.com/sirupsen/logrus"
 	"golang.org/x/term"
 )
 
@@ -46,6 +45,14 @@ type Screen interface {
 	// overflowing onto the next line.
 	SetCell(column int, row int, styledRune StyledRune) int
 
+	// Returns the StyledRune at the given screen position.
+	//
+	// Note that this does not read cells from the physical screen, but rather
+	// from what was previously set using SetCell().
+	//
+	// For out-of-bounds requests, a space with default style is returned.
+	GetCell(column int, row int) StyledRune
+
 	// Render our contents into the terminal window
 	Show()
 
@@ -60,24 +67,15 @@ type Screen interface {
 	// returning the new size instead.
 	Size() (width int, height int)
 
-	// ShowCursorAt() moves the cursor to the given screen position and makes
-	// sure it is visible.
-	//
-	// If the position is outside of the screen, the cursor will be hidden.
-	ShowCursorAt(column int, row int)
-
 	// Can be nil if not (yet?) detected
 	TerminalBackground() *Color
 
 	// This channel is what your main loop should be checking.
 	Events() chan Event
-}
 
-type interruptableReader interface {
-	Read(p []byte) (n int, err error)
-
-	// Interrupt unblocks the read call, either now or eventually.
-	Interrupt()
+	// Pause the screen, run the given function, then resume the screen. Blocks
+	// until the function has completed and the screen has been resumed again.
+	PauseAndCall(run func() error) error
 }
 
 type lastRendered struct {
@@ -90,12 +88,16 @@ type UnixScreen struct {
 	widthAccessFromSizeOnly  int // Access from Size() method only
 	heightAccessFromSizeOnly int // Access from Size() method only
 
+	// Protects both screen writes (through the ttyOut field) and lastRendered
+	// updates
+	renderLock sync.Mutex
+
 	terminalBackground      *Color
 	terminalBackgroundQuery *time.Time // When we asked for the terminal background color
 	terminalBackgroundLock  sync.Mutex
 
 	cells        [][]StyledRune
-	lastRendered lastRendered
+	lastRendered lastRendered // Kept up to date by snapshotLastRendered()
 
 	// Note that the type here doesn't matter, we only want to know whether or
 	// not this channel has been signalled
@@ -113,6 +115,7 @@ type UnixScreen struct {
 	oldTtyOutMode uint32 //nolint Windows only
 
 	terminalColorCount ColorCount
+	mouseMode          MouseMode
 }
 
 // Example event: "\x1b[<65;127;41M"
@@ -147,6 +150,7 @@ func NewScreenWithMouseModeAndColorCount(mouseMode MouseMode, terminalColorCount
 
 	screen := UnixScreen{
 		terminalColorCount: terminalColorCount,
+		mouseMode:          mouseMode,
 	}
 
 	// The number "80" here is from manual testing on my MacBook:
@@ -167,29 +171,9 @@ func NewScreenWithMouseModeAndColorCount(mouseMode MouseMode, terminalColorCount
 	if err != nil {
 		return nil, fmt.Errorf("problem setting up TTY: %w", err)
 	}
-	screen.ttyInReader, err = newInterruptableReader(screen.ttyIn)
-	if err != nil {
-		restoreErr := screen.restoreTtyInTtyOut()
-		if restoreErr != nil {
-			log.Warn("Problem restoring TTY state after failed interruptable reader setup: ", restoreErr)
-		}
-		return nil, fmt.Errorf("problem setting up TTY reader: %w", err)
-	}
+	screen.ttyInReader = newInterruptableReader(screen.ttyIn)
 
-	screen.setAlternateScreenMode(true)
-
-	switch mouseMode {
-	case MouseModeAuto:
-		screen.enableMouseTracking(!terminalHasArrowKeysEmulation())
-	case MouseModeSelect:
-		screen.enableMouseTracking(false)
-	case MouseModeScroll:
-		screen.enableMouseTracking(true)
-	default:
-		panic(fmt.Errorf("unknown mouse mode: %d", mouseMode))
-	}
-
-	screen.hideCursor(true)
+	screen.enterAlternateScreenSession()
 
 	go func() {
 		defer func() {
@@ -216,15 +200,21 @@ func NewScreenWithMouseModeAndColorCount(mouseMode MouseMode, terminalColorCount
 // Close() restores terminal to normal state, must be called after you are done
 // with the screen returned by NewScreen()
 func (screen *UnixScreen) Close() {
+	// Wait for the terminal background color response to show up and consume
+	// it. Without this, if you Close() the screen too close to opening it, that
+	// escape sequence response will be printed as text in the user's terminal
+	// after exit.
+	//
+	// Ref: https://github.com/walles/moor/issues/380
+	screen.TerminalBackground()
+
 	// Tell the pager to exit unless it hasn't already
 	screen.events <- EventExit{}
 
 	// Tell our main loop to exit
 	screen.ttyInReader.Interrupt()
 
-	screen.hideCursor(false)
-	screen.enableMouseTracking(false)
-	screen.setAlternateScreenMode(false)
+	screen.leaveAlternateScreenSession()
 
 	err := screen.restoreTtyInTtyOut()
 	if err != nil {
@@ -232,7 +222,7 @@ func (screen *UnixScreen) Close() {
 		// * https://github.com/walles/moor/issues/145
 		// * https://github.com/walles/moor/issues/149
 		// * https://github.com/walles/moor/issues/150
-		log.Info("Problem restoring TTY state: ", err)
+		log.Info(fmt.Sprint("Problem restoring TTY state: ", err))
 	}
 }
 
@@ -241,7 +231,9 @@ func (screen *UnixScreen) Events() chan Event {
 }
 
 // Write string to ttyOut, panic on failure, return number of bytes written.
-func (screen *UnixScreen) write(s string) int {
+//
+// You must hold renderLock when calling this method.
+func (screen *UnixScreen) writeLocked(s string) int {
 	bytesWritten, err := screen.ttyOut.Write([]byte(s))
 	if err != nil {
 		panic(err)
@@ -249,28 +241,66 @@ func (screen *UnixScreen) write(s string) int {
 	return bytesWritten
 }
 
-func (screen *UnixScreen) setAlternateScreenMode(enable bool) {
+// You must hold renderLock when calling this method.
+func (screen *UnixScreen) setAlternateScreenModeLocked(enable bool) {
 	// Ref: https://stackoverflow.com/a/11024208/473672
 	if enable {
-		screen.write("\x1b[?1049h")
+		screen.writeLocked("\x1b[?1049h")
 
 		// Enable alternateScroll mode. This makes the mouse wheel work without
 		// blocking selection.
 		//
 		// Ref: https://github.com/walles/moor/issues/53#issuecomment-3392572761
-		screen.write("\x1b[?1007h")
+		screen.writeLocked("\x1b[?1007h")
 	} else {
-		screen.write("\x1b[?1007l")
-		screen.write("\x1b[?1049l")
+		screen.writeLocked("\x1b[?1007l")
+		screen.writeLocked("\x1b[?1049l")
 	}
 }
 
-func (screen *UnixScreen) hideCursor(hide bool) {
+func (screen *UnixScreen) hideCursorLocked(hide bool) {
 	// Ref: https://en.wikipedia.org/wiki/ANSI_escape_code#CSI_(Control_Sequence_Introducer)_sequences
 	if hide {
-		screen.write("\x1b[?25l")
+		screen.writeLocked("\x1b[?25l")
 	} else {
-		screen.write("\x1b[?25h")
+		screen.writeLocked("\x1b[?25h")
+	}
+}
+
+func (screen *UnixScreen) enterAlternateScreenSession() {
+	screen.renderLock.Lock()
+	defer screen.renderLock.Unlock()
+
+	screen.setAlternateScreenModeLocked(true)
+	screen.enableMouseTrackingLocked(screen.shouldEnableMouseTracking())
+	screen.hideCursorLocked(true)
+
+	// Clear the render cache to force a full redraw. This is needed after
+	// suspend/resume because the terminal's alternate screen buffer is blank
+	// but our cache still has the old content.
+	screen.lastRendered = lastRendered{}
+}
+
+func (screen *UnixScreen) leaveAlternateScreenSession() {
+	screen.renderLock.Lock()
+	defer screen.renderLock.Unlock()
+
+	screen.writeLocked("\x1b[m")
+	screen.hideCursorLocked(false)
+	screen.enableMouseTrackingLocked(false)
+	screen.setAlternateScreenModeLocked(false)
+}
+
+func (screen *UnixScreen) shouldEnableMouseTracking() bool {
+	switch screen.mouseMode {
+	case MouseModeAuto:
+		return !terminalHasArrowKeysEmulation()
+	case MouseModeSelect:
+		return false
+	case MouseModeScroll:
+		return true
+	default:
+		panic(fmt.Errorf("unknown mouse mode: %d", screen.mouseMode))
 	}
 }
 
@@ -291,7 +321,7 @@ func (screen *UnixScreen) onWindowResized() {
 		// This likely means that the user isn't processing events
 		// quickly enough. Maybe the user's queue will get flooded if
 		// the window is resized too quickly?
-		log.Warn("Unable to deliver EventResize, event queue full")
+		log.Info("Unable to deliver EventResize, event queue full")
 	}
 }
 
@@ -422,41 +452,13 @@ func terminalHasArrowKeysEmulation() bool {
 	return false
 }
 
-func (screen *UnixScreen) enableMouseTracking(enable bool) {
+// You must hold renderLock when calling this method.
+func (screen *UnixScreen) enableMouseTrackingLocked(enable bool) {
 	if enable {
-		screen.write("\x1b[?1006;1000h")
+		screen.writeLocked("\x1b[?1006;1000h")
 	} else {
-		screen.write("\x1b[?1006;1000l")
+		screen.writeLocked("\x1b[?1006;1000l")
 	}
-}
-
-// ShowCursorAt() moves the cursor to the given screen position and makes sure
-// it is visible.
-//
-// If the position is outside of the screen, the cursor will be hidden.
-func (screen *UnixScreen) ShowCursorAt(column int, row int) {
-	if column < 0 {
-		screen.hideCursor(true)
-		return
-	}
-	if row < 0 {
-		screen.hideCursor(true)
-		return
-	}
-
-	width, height := screen.Size()
-	if column >= width {
-		screen.hideCursor(true)
-		return
-	}
-	if row >= height {
-		screen.hideCursor(true)
-		return
-	}
-
-	// https://en.wikipedia.org/wiki/ANSI_escape_code#CSI_(Control_Sequence_Introducer)_sequences
-	screen.write(fmt.Sprintf("\x1b[%d;%dH", row, column))
-	screen.hideCursor(false)
 }
 
 func (screen *UnixScreen) mainLoop() {
@@ -479,7 +481,7 @@ func (screen *UnixScreen) mainLoop() {
 			// * https://github.com/walles/moor/issues/145
 			// * https://github.com/walles/moor/issues/149
 			// * https://github.com/walles/moor/issues/150
-			log.Info("ttyin read error, twin giving up: ", err)
+			log.Info(fmt.Sprint("ttyin read error, twin giving up: ", err))
 
 			screen.events <- EventExit{}
 			return
@@ -493,7 +495,7 @@ func (screen *UnixScreen) mainLoop() {
 				if bg != nil {
 					screen.terminalBackgroundLock.Lock()
 					screen.terminalBackground = bg
-					log.Debug("Terminal background color detected as ", bg, " after ", time.Since(*screen.terminalBackgroundQuery))
+					log.Debug(fmt.Sprint("Terminal background color detected as ", bg, " after ", time.Since(*screen.terminalBackgroundQuery)))
 					screen.terminalBackgroundLock.Unlock()
 
 					expectingTerminalBackgroundColor = false
@@ -509,12 +511,12 @@ func (screen *UnixScreen) mainLoop() {
 
 		if count > maxBytesRead {
 			maxBytesRead = count
-			log.Trace("ttyin high watermark bumped to ", maxBytesRead, " bytes")
+			log.Debug(fmt.Sprint("ttyin high watermark bumped to ", maxBytesRead, " bytes"))
 		}
 
 		encodedKeyCodeSequences := string(buffer[0:count])
 		if !utf8.ValidString(encodedKeyCodeSequences) {
-			log.Warn("Got invalid UTF-8 sequence on ttyin: ", encodedKeyCodeSequences)
+			log.Info(fmt.Sprint("Got invalid UTF-8 sequence on ttyin: ", encodedKeyCodeSequences))
 			continue
 		}
 
@@ -527,6 +529,23 @@ func (screen *UnixScreen) mainLoop() {
 				break
 			}
 
+			// Intercept Ctrl-Z and handle suspend/resume automatically
+			if runeEvent, ok := (*event).(EventRune); ok {
+				if runeEvent.rune == '\x1a' {
+					log.Info("Twin: Ctrl-Z detected, suspending...")
+
+					err := screen.suspend()
+					if err != nil {
+						log.Info(fmt.Sprint("Twin: Suspend failed: ", err))
+						continue
+					}
+
+					log.Info("Twin: Resumed from suspend")
+
+					continue
+				}
+			}
+
 			// Post the event
 			select {
 			case screen.events <- *event:
@@ -534,7 +553,7 @@ func (screen *UnixScreen) mainLoop() {
 			default:
 				// If this happens, consider increasing the channel size in
 				// NewScreen()
-				log.Debugf("Events buffer (size %d) full, events are being dropped", cap(screen.events))
+				log.Info(fmt.Sprintf("Events buffer (size %d) full, events are being dropped", cap(screen.events)))
 			}
 		}
 	}
@@ -580,10 +599,10 @@ func consumeEncodedEvent(encodedEventSequences string) (*Event, string) {
 			return &event, strings.TrimPrefix(encodedEventSequences, mouseMatch[0])
 		}
 
-		log.Debug(
+		log.Debug(fmt.Sprint(
 			"Unhandled multi character mouse escape sequence(s): {",
 			humanizeLowASCII(encodedEventSequences),
-			"}")
+			"}"))
 		return nil, ""
 	}
 
@@ -597,10 +616,10 @@ func consumeEncodedEvent(encodedEventSequences string) (*Event, string) {
 		if len(runes) != 1 {
 			// This means one or more sequences should be added to
 			// escapeSequenceToKeyCode in keys.go.
-			log.Debug(
+			log.Debug(fmt.Sprint(
 				"Unhandled multi character terminal escape sequence(s): {",
 				humanizeLowASCII(encodedEventSequences),
-				"}")
+				"}"))
 
 			// Mark everything as consumed since we don't know how to proceed otherwise.
 			return nil, ""
@@ -653,6 +672,14 @@ func (screen *UnixScreen) Size() (width int, height int) {
 		// Not sure when this would happen, but if it does this wasn't really a
 		// resize, and we don't need to treat it as such.
 		return screen.widthAccessFromSizeOnly, screen.heightAccessFromSizeOnly
+	}
+
+	oldHeight := screen.heightAccessFromSizeOnly
+	if (height != oldHeight) && (oldHeight <= 1 || height <= 1) {
+		// For help debugging this: https://github.com/walles/moor/issues/378
+		//
+		// A one-high screen may or may not have been part of that issue.
+		log.Info(fmt.Sprintf("Screen height changed from %d to %d", oldHeight, height))
 	}
 
 	newCells := make([][]StyledRune, height)
@@ -721,45 +748,45 @@ func parseTerminalBgColorResponse(responseBytes []byte) (*Color, bool) {
 
 	response := string(responseBytes)
 	if !strings.HasPrefix(response, prefix) {
-		log.Info("Got unexpected prefix in bg color response from terminal: <", humanizeLowASCII(string(responseBytes)), ">")
+		log.Info(fmt.Sprint("Got unexpected prefix in bg color response from terminal: <", humanizeLowASCII(string(responseBytes)), ">"))
 		return nil, false // Invalid
 	}
 	response = strings.TrimPrefix(response, prefix)
 
 	isComplete := strings.HasSuffix(response, suffix1) || strings.HasSuffix(response, suffix2)
 	if !isComplete && (len(responseBytes) < len(sampleResponse1) || len(responseBytes) < len(sampleResponse2)) {
-		log.Trace("Terminal bg color response received so far: <", humanizeLowASCII(response), ">")
+		log.Debug(fmt.Sprint("Terminal bg color response received so far: <", humanizeLowASCII(response), ">"))
 		return nil, true // Incomplete but valid
 	}
 
 	if !isComplete {
-		log.Info("Got unexpected suffix in bg color response from terminal: <", humanizeLowASCII(string(responseBytes)), ">")
+		log.Info(fmt.Sprint("Got unexpected suffix in bg color response from terminal: <", humanizeLowASCII(string(responseBytes)), ">"))
 		return nil, false // Invalid
 	}
 	response = strings.TrimSuffix(response, suffix1)
 	response = strings.TrimSuffix(response, suffix2)
 
 	if len(response) != 14 {
-		log.Info("Got unexpected length bg color response from terminal: <", humanizeLowASCII(string(responseBytes)), ">")
+		log.Info(fmt.Sprint("Got unexpected length bg color response from terminal: <", humanizeLowASCII(string(responseBytes)), ">"))
 		return nil, false // Invalid
 	}
 
 	// response is now "RRRR/GGGG/BBBB"
 	red, err := strconv.ParseUint(response[0:4], 16, 16)
 	if err != nil {
-		log.Info("Failed parsing red in bg color response from terminal: <", humanizeLowASCII(string(responseBytes)), ">: ", err)
+		log.Info(fmt.Sprint("Failed parsing red in bg color response from terminal: <", humanizeLowASCII(string(responseBytes)), ">: ", err))
 		return nil, false // Invalid
 	}
 
 	green, err := strconv.ParseUint(response[5:9], 16, 16)
 	if err != nil {
-		log.Info("Failed parsing green in bg color response from terminal: <", humanizeLowASCII(string(responseBytes)), ">: ", err)
+		log.Info(fmt.Sprint("Failed parsing green in bg color response from terminal: <", humanizeLowASCII(string(responseBytes)), ">: ", err))
 		return nil, false // Invalid
 	}
 
 	blue, err := strconv.ParseUint(response[10:14], 16, 16)
 	if err != nil {
-		log.Info("Failed parsing blue in bg color response from terminal: <", humanizeLowASCII(string(responseBytes)), ">: ", err)
+		log.Info(fmt.Sprint("Failed parsing blue in bg color response from terminal: <", humanizeLowASCII(string(responseBytes)), ">: ", err))
 		return nil, false // Invalid
 	}
 
@@ -800,6 +827,25 @@ func (screen *UnixScreen) SetCell(column int, row int, styledRune StyledRune) in
 		return 1
 	}
 	return runeWidth
+}
+
+func (screen *UnixScreen) GetCell(column int, row int) StyledRune {
+	if column < 0 {
+		return NewStyledRune(' ', StyleDefault)
+	}
+	if row < 0 {
+		return NewStyledRune(' ', StyleDefault)
+	}
+
+	width, height := screen.Size()
+	if column >= width {
+		return NewStyledRune(' ', StyleDefault)
+	}
+	if row >= height {
+		return NewStyledRune(' ', StyleDefault)
+	}
+
+	return screen.cells[row][column]
 }
 
 func (screen *UnixScreen) Clear() {
@@ -926,22 +972,51 @@ func (screen *UnixScreen) ShowNLines(height int) {
 	screen.showNLines(width, height, false)
 }
 
-func createLastRenderedSnapshot(width int, height int, cells [][]StyledRune) lastRendered {
-	snapshotCells := make([][]StyledRune, height)
-	for row := 0; row < height; row++ {
-		snapshotCells[row] = make([]StyledRune, width)
-		copy(snapshotCells[row], cells[row][0:width])
+// Take a snapshot of the current screen. Will be used on the next render to
+// decide whether to do a full render or a delta render.
+//
+// You must hold renderLock when calling this method.
+func (screen *UnixScreen) snapshotLastRenderedLocked() {
+	height := len(screen.cells)
+	width := 0
+	if height > 0 {
+		width = len(screen.cells[0])
 	}
 
-	return lastRendered{
-		width:  width,
-		height: height,
-		cells:  snapshotCells,
+	if screen.lastRendered.width != width || screen.lastRendered.height != height {
+		// Create a new snapshot storage
+		screen.lastRendered = lastRendered{
+			width:  width,
+			height: height,
+		}
+
+		if width > 0 && height > 0 {
+			screen.lastRendered.cells = make([][]StyledRune, height)
+			for row := range height {
+				screen.lastRendered.cells[row] = make([]StyledRune, width)
+			}
+		}
+	}
+
+	if screen.lastRendered.width == 0 || screen.lastRendered.height == 0 {
+		screen.lastRendered.cells = nil
+	}
+
+	if screen.lastRendered.cells == nil {
+		// Nowhere to copy to
+		return
+	}
+
+	// Copy current cells into snapshot
+	for row := range height {
+		copy(screen.lastRendered.cells[row], screen.cells[row][0:width])
 	}
 }
 
 // Map updated lines
-func (screen *UnixScreen) findUpdatedLines() map[int][]StyledRune {
+//
+// You must hold renderLock when calling this method.
+func (screen *UnixScreen) findUpdatedLinesLocked() map[int][]StyledRune {
 	height := len(screen.cells)
 	updatedLines := make(map[int][]StyledRune, height)
 	for row := range height {
@@ -985,14 +1060,16 @@ func renderWithNewline(builder *strings.Builder, line []StyledRune, width int, t
 
 // If only a few lines changed, update just those lines.
 //
+// You must hold renderLock when calling this method.
+//
 // Returns true if delta rendering was done, false if a full render is needed.
-func (screen *UnixScreen) showNLinesDelta(width int, height int) bool {
+func (screen *UnixScreen) showNLinesDeltaLocked(width int, height int) bool {
 	if screen.lastRendered.width != width || screen.lastRendered.height != height {
 		return false
 	}
 
 	// Map from line number to line contents
-	updatedLines := screen.findUpdatedLines()
+	updatedLines := screen.findUpdatedLinesLocked()
 
 	// We have two spinners, those two should be able to spin without updating
 	// the whole screen.
@@ -1001,23 +1078,31 @@ func (screen *UnixScreen) showNLinesDelta(width int, height int) bool {
 		return false
 	}
 
+	if len(updatedLines) == 0 {
+		// Nothing to update, already done!
+		return true
+	}
+
 	var builder strings.Builder
 	for row, line := range updatedLines {
 		// Move cursor to the start of the line
-		builder.WriteString(fmt.Sprintf("\x1b[%d;1H", row+1))
+		fmt.Fprintf(&builder, "\x1b[%d;1H", row+1)
 
 		renderWithNewline(&builder, line, width, screen.terminalColorCount, row == (height-1))
 	}
 
 	// Write out what we have
-	screen.write(builder.String())
-	screen.lastRendered = createLastRenderedSnapshot(width, height, screen.cells)
+	screen.writeLocked(builder.String())
+	screen.snapshotLastRenderedLocked()
 
 	return true
 }
 
 func (screen *UnixScreen) showNLines(width int, height int, clearFirst bool) {
-	if clearFirst && screen.showNLinesDelta(width, height) {
+	screen.renderLock.Lock()
+	defer screen.renderLock.Unlock()
+
+	if clearFirst && screen.showNLinesDeltaLocked(width, height) {
 		return
 	}
 
@@ -1034,6 +1119,49 @@ func (screen *UnixScreen) showNLines(width int, height int, clearFirst bool) {
 	}
 
 	// Write out what we have
-	screen.write(builder.String())
-	screen.lastRendered = createLastRenderedSnapshot(width, height, screen.cells)
+	screen.writeLocked(builder.String())
+	screen.snapshotLastRenderedLocked()
+}
+
+// Pause the screen, run the given function, then resume the screen. Blocks
+// until the function has completed and the screen has been resumed again.
+//
+// Error returns mean that either pausing failed or the run function failed. If
+// resuming fails, this method will panic.
+func (screen *UnixScreen) PauseAndCall(run func() error) error {
+	screen.ttyInReader.SetPaused(true)
+	defer screen.ttyInReader.SetPaused(false)
+
+	screen.leaveAlternateScreenSession()
+
+	err := screen.restoreTtyInTtyOut()
+	if err != nil {
+		return fmt.Errorf("failed to restore terminal state before pause: %w", err)
+	}
+
+	runErr := run()
+
+	restoreRawErr := screen.restoreRawModeAfterResume()
+	if restoreRawErr != nil {
+		panic(fmt.Errorf("failed to resume screen after paused operation (%v): %w", runErr, restoreRawErr))
+	}
+
+	screen.enterAlternateScreenSession()
+	screen.onWindowResized()
+
+	if runErr != nil {
+		return runErr
+	}
+
+	return nil
+}
+
+func (screen *UnixScreen) restoreRawModeAfterResume() error {
+	terminalState, err := term.MakeRaw(int(screen.ttyIn.Fd()))
+	if err != nil {
+		return fmt.Errorf("failed to re-enter raw mode after suspend: %w", err)
+	}
+
+	screen.oldTerminalState = terminalState
+	return nil
 }

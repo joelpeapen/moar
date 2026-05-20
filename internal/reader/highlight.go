@@ -2,9 +2,13 @@ package reader
 
 import (
 	"bytes"
+	"encoding/json"
+	"encoding/xml"
 	"strings"
 
 	"github.com/alecthomas/chroma/v2"
+	"github.com/alecthomas/chroma/v2/lexers"
+	log "github.com/sirupsen/logrus"
 )
 
 // Read and highlight some text using Chroma:
@@ -57,4 +61,117 @@ func Highlight(text string, style chroma.Style, formatter chroma.Formatter, lexe
 	trimmed := strings.TrimSuffix(highlighted, sgrReset)
 
 	return &trimmed, nil
+}
+
+// We expect this to be executed in a goroutine
+func highlightFromMemory(reader *ReaderImpl, formatter chroma.Formatter, options ReaderOptions) {
+	// Is the buffer small enough?
+	var byteCount int64
+	reader.RLock()
+	for _, line := range reader.lines {
+		byteCount += int64(len(line.raw))
+
+		if byteCount > MAX_HIGHLIGHT_SIZE {
+			log.Info("File too large for highlighting: ", byteCount)
+			reader.RUnlock()
+			return
+		}
+	}
+	reader.RUnlock()
+
+	text := textAsString(reader, options.ShouldFormat)
+
+	if len(text) == 0 {
+		log.Debug("Buffer is empty, not highlighting")
+		return
+	}
+
+	if options.Lexer == nil && isJsonOrJsonl(text) {
+		log.Info("Buffer is valid JSON or JSONL, highlighting as JSON")
+		// The Chroma JSON lexer natively supports JSONL as well:
+		// https://github.com/alecthomas/chroma/pull/1262
+		options.Lexer = lexers.Get("json")
+	} else if options.Lexer == nil && isXml(text) {
+		log.Info("Buffer is valid XML, highlighting as XML")
+		options.Lexer = lexers.Get("xml")
+	}
+
+	if options.Lexer == nil {
+		log.Debug("No lexer set, not highlighting")
+		return
+	}
+
+	if options.Style == nil {
+		log.Debug("No style set, not highlighting")
+		return
+	}
+
+	if formatter == nil {
+		log.Debug("No formatter set, not highlighting")
+		return
+	}
+
+	highlighted, err := Highlight(text, *options.Style, formatter, options.Lexer)
+	if err != nil {
+		log.Warn("Highlighting failed: ", err)
+		return
+	}
+
+	if highlighted == nil {
+		// No highlighting would be done, never mind
+		return
+	}
+
+	reader.setText(*highlighted)
+}
+
+func textAsString(reader *ReaderImpl, shouldFormat bool) string {
+	reader.RLock()
+
+	text := []byte{}
+	for _, line := range reader.lines {
+		text = append(text, line.raw...)
+		text = append(text, '\n')
+	}
+	reader.RUnlock()
+
+	var jsonData any
+	err := json.Unmarshal(text, &jsonData)
+	if err != nil {
+		// Not JSON, return the text as-is
+		return string(text)
+	}
+
+	if !shouldFormat {
+		log.Info("Try the --reformat flag for automatic JSON reformatting")
+		return string(text)
+	}
+
+	// Pretty print the JSON
+	prettyJSON, err := json.MarshalIndent(jsonData, "", "  ")
+	if err != nil {
+		log.Debug("Failed to pretty print JSON: ", err)
+		return string(text)
+	}
+
+	log.Debug("Got the --reformat flag, reformatted JSON input")
+	return string(prettyJSON)
+}
+
+func isXml(text string) bool {
+	err := xml.Unmarshal([]byte(text), new(any))
+	return err == nil
+}
+
+func isJsonOrJsonl(text string) bool {
+	if json.Valid([]byte(text)) {
+		return true
+	}
+
+	// It might be jsonl so we split the first line only.
+	lines := strings.SplitN(text, "\n", 2)
+	if len(lines) > 0 && len(lines[0]) > 2 && lines[0][0] == '{' {
+		return json.Valid([]byte(lines[0]))
+	}
+	return false
 }

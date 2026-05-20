@@ -88,7 +88,9 @@ echo Testing not crashing with different argument orders...
 
 # We can only do this test if we have a terminal. This means it will be run
 # locally but not in CI. Not great, but better than nothing.
-if [[ -t 1 ]]; then
+#
+# Set MOOR_SKIP_INTERACTIVE_TESTS=1 to disable interactive TTY tests.
+if [[ "${MOOR_SKIP_INTERACTIVE_TESTS}" != "1" && -t 1 ]]; then
   echo Test auto quitting on single screen...
   echo "  (success)" | ./moor --quit-if-one-screen
 fi
@@ -100,6 +102,11 @@ echo Test decompressing while piping
 echo Test --version...
 ./moor --version >/dev/null # Should exit with code 0
 diff -u <(./moor --version) <(git describe --tags --dirty --always)
+
+echo "Linting man page..."
+# -T lint enables the linter
+# -W warning ignores "STYLE" hints (like line length) but catches structural issues
+mandoc -T lint -W warning moor.1
 
 echo Test that the man page and --help document the same set of options...
 MAN_OPTIONS="$(grep -A1 '^\.TP$' moor.1 | grep -E '^\\fB\\-' | cut -d\\ -f4- | sed 's/fR.*//' | sed 's/\\//g')"

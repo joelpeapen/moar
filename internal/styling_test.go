@@ -7,6 +7,7 @@ import (
 	"github.com/alecthomas/chroma/v2"
 	"github.com/alecthomas/chroma/v2/formatters"
 	"github.com/alecthomas/chroma/v2/styles"
+	"github.com/walles/moor/v2/internal/textstyles"
 	"github.com/walles/moor/v2/twin"
 	"gotest.tools/v3/assert"
 )
@@ -42,4 +43,20 @@ func TestSetStyle(t *testing.T) {
 func TestConfigureHighlighting_No24BitColors(t *testing.T) {
 	searchHitStyle = twin.StyleDefault.WithForeground(twin.NewColor16(3))
 	configureHighlighting(nil, true)
+}
+
+func TestLessTermcapMdControlsBothBoldAndHeadings(t *testing.T) {
+	// Bold red
+	assert.NilError(t, os.Setenv("LESS_TERMCAP_md", "\x1b[1;31m"))
+	t.Cleanup(func() { _ = os.Unsetenv("LESS_TERMCAP_md") })
+
+	// Also bold red
+	expectedStyle := twin.StyleDefault.WithAttr(twin.AttrBold).WithForeground(twin.NewColor16(1))
+
+	// Run the setup sequence
+	consumeLessTermcapEnvs(nil, nil, nil)
+	styleUI(nil, nil, nil, STATUSBAR_STYLE_INVERSE, false, false)
+
+	assert.Equal(t, textstyles.ManPageBold, expectedStyle)
+	assert.Equal(t, textstyles.ManPageHeading, expectedStyle)
 }

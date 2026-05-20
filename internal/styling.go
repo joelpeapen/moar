@@ -19,6 +19,8 @@ var lineNumbersStyle = twin.StyleDefault.WithAttr(twin.AttrDim)
 // Status bar and EOF marker style
 var statusbarStyle = twin.StyleDefault.WithAttr(twin.AttrReverse)
 
+var statusbarFileStyle = twin.StyleDefault.WithAttr(twin.AttrReverse).WithAttr(twin.AttrUnderline)
+
 var plainTextStyle = twin.StyleDefault
 
 var searchHitStyle = twin.StyleDefault.WithAttr(twin.AttrReverse)
@@ -62,7 +64,7 @@ func twinStyleFromChroma(terminalBackground *twin.Color, chromaStyle *chroma.Sty
 	}
 
 	formatted := stringBuilder.String()
-	cells := textstyles.StyledRunesFromString(twin.StyleDefault, formatted, nil).StyledRunes
+	cells := textstyles.StyledRunesFromString(twin.StyleDefault, formatted, nil, 0).StyledRunes
 	if len(cells) != 1 {
 		log.Warnf("Chroma formatter didn't return exactly one cell: %#v", cells)
 		return nil
@@ -99,6 +101,11 @@ func consumeLessTermcapEnvs(terminalBackground *twin.Color, chromaStyle *chroma.
 		&textstyles.ManPageBold,
 		"LESS_TERMCAP_md",
 		twinStyleFromChroma(terminalBackground, chromaStyle, chromaFormatter, chroma.GenericStrong, false),
+	)
+	setStyle(
+		&textstyles.ManPageHeading,
+		"LESS_TERMCAP_md",
+		twinStyleFromChroma(terminalBackground, chromaStyle, chromaFormatter, chroma.GenericHeading, false),
 	)
 	setStyle(&textstyles.ManPageUnderline,
 		"LESS_TERMCAP_us",
@@ -141,17 +148,10 @@ func getOppositeColor(base twin.Color) twin.Color {
 func styleUI(terminalBackground *twin.Color, chromaStyle *chroma.Style, chromaFormatter *chroma.Formatter, statusbarOption StatusBarOption, withTerminalFg bool, configureSearchHitLineBackground bool) {
 	// Set defaults
 	plainTextStyle = twin.StyleDefault
-	textstyles.ManPageHeading = twin.StyleDefault.WithAttr(twin.AttrBold)
 	lineNumbersStyle = twin.StyleDefault.WithAttr(twin.AttrDim)
 
 	if chromaStyle == nil || chromaFormatter == nil {
 		return
-	}
-
-	headingStyle := twinStyleFromChroma(terminalBackground, chromaStyle, chromaFormatter, chroma.GenericHeading, true)
-	if headingStyle != nil && !withTerminalFg {
-		log.Trace("Heading style set from Chroma: ", *headingStyle)
-		textstyles.ManPageHeading = *headingStyle
 	}
 
 	chromaLineNumbers := twinStyleFromChroma(terminalBackground, chromaStyle, chromaFormatter, chroma.LineNumbers, true)
@@ -191,6 +191,8 @@ func styleUI(terminalBackground *twin.Color, chromaStyle *chroma.Style, chromaFo
 	} else {
 		panic(fmt.Sprint("Unrecognized status bar style: ", statusbarOption))
 	}
+
+	statusbarFileStyle = statusbarStyle.WithAttr(twin.AttrUnderline)
 
 	configureHighlighting(terminalBackground, configureSearchHitLineBackground)
 }
@@ -257,8 +259,13 @@ func configureHighlighting(terminalBackground *twin.Color, configureSearchHitLin
 }
 
 func TermcapToStyle(termcap string) (twin.Style, error) {
+	// This makes it easier for people to set the environment variable
+	//
+	// Ref:https://github.com/walles/moor/issues/393
+	termcap = strings.ReplaceAll(termcap, "ESC", "\x1b")
+
 	// Add a character to be sure we have one to take the format from
-	cells := textstyles.StyledRunesFromString(twin.StyleDefault, termcap+"x", nil).StyledRunes
+	cells := textstyles.StyledRunesFromString(twin.StyleDefault, termcap+"x", nil, 0).StyledRunes
 	if len(cells) != 1 {
 		return twin.StyleDefault, fmt.Errorf("Expected styling only and no text")
 	}

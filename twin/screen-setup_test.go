@@ -20,9 +20,7 @@ func TestInterruptableReader_blockedOnReadImmediate(t *testing.T) {
 	assert.NilError(t, err)
 
 	// Make an interruptable reader
-	testMe, err := newInterruptableReader(pipeReader)
-	assert.NilError(t, err)
-	assert.Assert(t, testMe != nil)
+	testMe := newInterruptableReader(pipeReader)
 
 	// Start a thread that reads from the pipe
 	type readResult struct {

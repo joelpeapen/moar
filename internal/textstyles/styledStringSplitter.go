@@ -17,6 +17,9 @@ type styledStringSplitter struct {
 	lineIndex      *linemetadata.Index // Used for error reporting
 	plainTextStyle twin.Style
 
+	maxTokensCount     int
+	reportedRunesCount int
+
 	nextByteIndex     int
 	previousByteIndex int
 
@@ -32,7 +35,10 @@ type styledStringSplitter struct {
 // Returns the style of the line's trailer.
 //
 // The lineIndex is only used for error reporting.
-func styledStringsFromString(plainTextStyle twin.Style, s string, lineIndex *linemetadata.Index, callback func(string, twin.Style)) twin.Style {
+//
+// maxTokensCount: at most this many tokens will be included in the result. If
+// 0, do all runes. For BenchmarkRenderHugeLine() performance.
+func styledStringsFromString(plainTextStyle twin.Style, s string, lineIndex *linemetadata.Index, maxTokensCount int, callback func(string, twin.Style)) twin.Style {
 	if !strings.ContainsAny(s, "\x1b") {
 		// This shortcut makes BenchmarkPlainTextSearch() perform a lot better
 		callback(s, plainTextStyle)
@@ -43,6 +49,7 @@ func styledStringsFromString(plainTextStyle twin.Style, s string, lineIndex *lin
 		input:           s,
 		lineIndex:       lineIndex,
 		plainTextStyle:  plainTextStyle, // How plain text should be styled
+		maxTokensCount:  maxTokensCount,
 		inProgressStyle: plainTextStyle, // Plain text style until something else comes along
 		callback:        callback,
 		trailer:         plainTextStyle, // Plain text style until something else comes along
@@ -134,6 +141,14 @@ func (s *styledStringSplitter) handleEscape() error {
 		return s.consumeG0Charset()
 	}
 
+	if char == '=' || char == '>' {
+		// Set keypad mode: ESC= switches to application mode (keypad sends
+		// escape sequences), ESC> switches to numeric mode (keypad sends ASCII
+		// characters). These are terminal control commands that don't affect
+		// text rendering, ignore them silently.
+		return nil
+	}
+
 	return fmt.Errorf("Unhandled Fe sequence ESC%c", char)
 }
 
@@ -203,6 +218,19 @@ func (s *styledStringSplitter) handleCompleteControlSequence(sequence string) er
 		return nil
 	}
 
+	if lastChar == 'h' || lastChar == 'l' {
+		// Mode setting (set or reset), e.g. ESC[?1049h (alt screen buffer)
+		// or ESC[4l (reset line wrapping). These are terminal control commands
+		// that don't affect text rendering, so we silently ignore them.
+		return nil
+	}
+
+	if lastChar == 'r' {
+		// Set scroll region, e.g. ESC[1;24r. This is a terminal control command
+		// that doesn't affect text rendering.
+		return nil
+	}
+
 	return fmt.Errorf("Unhandled CSI type %q", lastChar)
 }
 
@@ -238,10 +266,46 @@ func (s *styledStringSplitter) consumeOsc() error {
 			return fmt.Errorf("Expected OSC sequence to end with BEL or ESC \\ but got ESC %q", afterEsc)
 		}
 
-		if s.input[startIndex:s.nextByteIndex] == "8;;" {
-			// Special case, here comes an URL
+		if s.input[startIndex:s.nextByteIndex] == "8;" {
+			return s.handleOSC8()
+		}
+	}
+}
+
+// We just got ESC]8; and should now read the OSC 8 parameter field up to the
+// next semicolon. We currently ignore all parameters and then read the URL.
+func (s *styledStringSplitter) handleOSC8() error {
+	for {
+		char := s.nextChar()
+		if char == -1 {
+			return fmt.Errorf("Line ended in the middle of an OSC 8 parameter sequence")
+		}
+
+		if char == ';' {
+			// Found end of parameters, now read the URL
 			return s.handleURL()
 		}
+
+		if char == '\a' {
+			return fmt.Errorf("OSC 8 sequence ended before URL")
+		}
+
+		if char != esc {
+			continue
+		}
+
+		// Found ESC, check if it's followed by '\' to end the sequence, or something else which is an error
+
+		afterEsc := s.nextChar()
+		if afterEsc == -1 {
+			return fmt.Errorf("Line ended while ending an OSC 8 parameter sequence")
+		}
+
+		if afterEsc == '\\' {
+			return fmt.Errorf("OSC 8 sequence ended before URL")
+		}
+
+		return fmt.Errorf("Expected OSC 8 parameters to end with ';' but got ESC %q", afterEsc)
 	}
 }
 
@@ -409,5 +473,12 @@ func (s *styledStringSplitter) finalizeCurrentPart() {
 		return
 	}
 
-	s.callback(s.inProgressString.String(), s.inProgressStyle)
+	partString := s.inProgressString.String()
+	s.callback(partString, s.inProgressStyle)
+	s.reportedRunesCount += utf8.RuneCountInString(partString)
+
+	if s.maxTokensCount > 0 && s.reportedRunesCount >= s.maxTokensCount {
+		// We've reported enough runes, stop processing any further input
+		s.nextByteIndex = len(s.input)
+	}
 }

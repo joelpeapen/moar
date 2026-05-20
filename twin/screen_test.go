@@ -284,9 +284,7 @@ func TestInterruptableReader_blockedOnRead(t *testing.T) {
 	assert.NilError(t, err)
 
 	// Make an interruptable reader
-	testMe, err := newInterruptableReader(pipeReader)
-	assert.NilError(t, err)
-	assert.Assert(t, testMe != nil)
+	testMe := newInterruptableReader(pipeReader)
 
 	// Start a thread that reads from the pipe
 	type readResult struct {
@@ -342,9 +340,7 @@ func TestInterruptableReader_interruptFirstReadLater(t *testing.T) {
 	assert.NilError(t, err)
 
 	// Make an interruptable reader
-	testMe, err := newInterruptableReader(pipeReader)
-	assert.NilError(t, err)
-	assert.Assert(t, testMe != nil)
+	testMe := newInterruptableReader(pipeReader)
 
 	// Interrupt the reader
 	testMe.Interrupt()
@@ -367,9 +363,7 @@ func TestInterruptableReader_justRead(t *testing.T) {
 	assert.NilError(t, err)
 
 	// Make an interruptable reader
-	testMe, err := newInterruptableReader(pipeReader)
-	assert.NilError(t, err)
-	assert.Assert(t, testMe != nil)
+	testMe := newInterruptableReader(pipeReader)
 
 	// Write something so that we have something to read
 	n, err := pipeWriter.Write([]byte{42})
@@ -383,4 +377,65 @@ func TestInterruptableReader_justRead(t *testing.T) {
 	assert.NilError(t, err)
 	assert.Equal(t, buffer[0], byte(42))
 	assert.Equal(t, len(buffer), 7)
+}
+
+func TestInterruptableReader_waitForReadReadyPipe(t *testing.T) {
+	// Make a pipe to read from and write to
+	pipeReader, pipeWriter, err := os.Pipe()
+	assert.NilError(t, err)
+
+	t.Cleanup(func() {
+		_ = pipeReader.Close()
+		_ = pipeWriter.Close()
+	})
+
+	// Make an interruptable reader
+	testMe := newInterruptableReader(pipeReader)
+
+	// With no data available we should wait a bit, then report not ready.
+	t0 := time.Now()
+	ready, err := testMe.waitForReadReady(time.Millisecond * 100)
+	duration := time.Since(t0)
+	assert.NilError(t, err)
+	assert.Equal(t, ready, false)
+	assert.Assert(t, duration > time.Millisecond*100)
+
+	// After writing, the pipe should become ready.
+	n, err := pipeWriter.Write([]byte{42})
+	assert.NilError(t, err)
+	assert.Equal(t, n, 1)
+
+	// With data available we should report ready immediately
+	ready, err = testMe.waitForReadReady(time.Hour)
+	assert.NilError(t, err)
+	assert.Equal(t, ready, true)
+}
+
+// On Unix, files are always ready (to return EOF if nothing else), but on
+// Windows they are non-ready if they have no data. So we just verify the
+// have-data case here, and let the no-data case be whatever.
+func TestInterruptableReader_waitForReadReadyFile(t *testing.T) {
+	tempFile, err := os.CreateTemp("", "moor-wait-for-read-ready-*.txt")
+	assert.NilError(t, err)
+
+	t.Cleanup(func() {
+		_ = tempFile.Close()
+		_ = os.Remove(tempFile.Name())
+	})
+
+	// Put something in the file
+	n, err := tempFile.Write([]byte("x"))
+	assert.NilError(t, err)
+	assert.Equal(t, n, 1)
+
+	// Rewind so we can see the "x"
+	seek, err := tempFile.Seek(0, 0)
+	assert.NilError(t, err)
+	assert.Equal(t, seek, int64(0))
+
+	// Expect read-ready immediately
+	testMe := newInterruptableReader(tempFile)
+	ready, err := testMe.waitForReadReady(time.Hour)
+	assert.NilError(t, err)
+	assert.Equal(t, ready, true)
 }

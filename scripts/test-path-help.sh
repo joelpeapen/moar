@@ -22,8 +22,24 @@ echo "moor" >"$WORKDIR/expected"
 
 # Extract suggested PAGER value from moor --help
 unset PAGER
-PATH="$WORKDIR" PAGER="" MOOR="" moor --help | grep "PAGER" | grep -v "is empty" | sed -E 's/.*PAGER[= ]//' >"$WORKDIR/actual"
+PATH="$WORKDIR" PAGER="" MOOR="" moor --help > "$WORKDIR/help-printout.txt"
+cat "$WORKDIR/help-printout.txt" | grep '^  PAGER' | sed 's/.* //' | sed 's/\x1b.*//' >"$WORKDIR/actual"
 
 # Ensure it matches the symlink we have in $PATH
 cd "$WORKDIR"
-diff -u actual expected
+
+if diff -u actual expected ; then
+    exit 0
+fi
+
+# Diff output already printed as part of the if statement ^
+echo
+env | sort
+echo
+echo Failing help text:
+cat "$WORKDIR/help-printout.txt"
+echo
+echo "Actual:   <$(cat "$WORKDIR/actual")>"
+echo "Expected: <$(cat "$WORKDIR/expected")>"
+echo "Workdir:  <$(pwd)>"
+exit 1

@@ -49,6 +49,21 @@ Doing the right thing includes:
 - **Mouse Scrolling** works out of the box (but
   [look here for tradeoffs](https://github.com/walles/moor/blob/master/MOUSE.md))
 
+Moor is used as the default pager by:
+
+- [`riff`](https://github.com/walles/riff), a diff filter highlighting which line parts have changed
+- [`px` / `ptop`](https://github.com/walles/px), `ps` and `top` for human beings
+- [`ftop`](https://github.com/walles/ftop), a `top` implementation that [embeds
+  `moor`](https://github.com/walles/ftop/blob/3786217a5923d8248f54bb747ff6bea55bd1354f/internal/ftop/pageprocessinfo.go#L93)
+  using [the embedding API](#embedding-moor-in-your-app)
+
+## Environment
+
+`MOOR`: `moor` will read extra command line options from here.
+
+`PAGER_LABEL`: Other programs can set this to tell moor what name to show for
+standard input.
+
 [For compatibility reasons](https://github.com/walles/moor/issues/14), `moor`
 uses the formats declared in these environment variables if present:
 
@@ -56,18 +71,13 @@ uses the formats declared in these environment variables if present:
 - `LESS_TERMCAP_us`: Man page <u>underline</u>
 - `LESS_TERMCAP_so`: [Status bar and search hits](https://github.com/walles/moor/issues/114)
 
+In `LESS_TERMCAP_*` values, both actual escape characters and the word `ESC` in
+caps are interpreted as escape characters. Example value: `ESC[1m`.
+
 Setting `LESSSECURE` to `1` will prevent `moor` from launching external programs
 or opening new files [as required by `systemctl(1)`][systemctlLessSecure]. In
 secure mode, the <kbd>v</kbd> command for opening the current file in an editor
 is disabled.
-
-For configurability reasons, `moor` reads extra command line options from the
-`MOOR` environment variable.
-
-Moor is used as the default pager by:
-
-- [`px` / `ptop`](https://github.com/walles/px), `ps` and `top` for human beings
-- [`riff`](https://github.com/walles/riff), a diff filter highlighting which line parts have changed
 
 # Installing
 
@@ -157,6 +167,15 @@ Then whenever you want to upgrade to the latest release:
 brew upgrade
 ```
 
+## Using Debian
+
+On [Debian Forky](https://www.debian.org/releases/forky/) and newer, as well as
+on [Ubuntu 26.04 Resolute](https://packages.ubuntu.com/resolute/moor) and newer:
+
+```sh
+sudo apt install moor
+```
+
 ## Using [MacPorts](https://www.macports.org/)
 
 ```sh
@@ -175,18 +194,11 @@ More info [here](https://packages.gentoo.org/packages/sys-apps/moor).
 
 ## Using [Arch Linux](https://archlinux.org/)
 
-Install `moor` with your [AUR helper](https://wiki.archlinux.org/title/AUR_helpers)
-of choice or follow the instructions
-[here](https://wiki.archlinux.org/title/Arch_User_Repository) to install the
-official way.
+```sh
+pacman -S moor
+```
 
-More info [here](https://aur.archlinux.org/packages/moor).
-
-## Debian / Ubuntu
-
-In progress: https://ftp-master.debian.org/new.html
-
-In the mean time, use Homebrew (see above) or read on for manual install instructions.
+More info [here](https://archlinux.org/packages/extra/x86_64/moor/).
 
 ## Manual Install
 
@@ -397,6 +409,26 @@ Execute `release.sh` and follow instructions.
 
 If you package `moor`, do include [the man page](moor.1) in your package.
 
+# Comparison with `bat`
+
+`moor` and `bat` do different things. `moor` is a pager. `bat` is a file
+preprocessor that sometimes pipes to a pager (like `moor`). So comparing them
+directly is not possible.
+
+What `bat` does is:
+1. Looks at its input and preprocesses it or not
+1. Pipes to a pager or not. This pager can be `moor` or something else.
+
+Some of `bat`'s preprocessing overlaps with what `moor` provides internally
+(like syntax highlighting and JSON formatting).
+
+But some `moor` features like fast interactive search is `moor` specific and not
+something `bat` can simulate through preprocessing.
+
+To use `moor` as your `bat` pager, set `BAT_PAGER=moor` in your environment.
+
+Or, to use `moor` instead of `bat`, set `PAGER=moor`.
+
 # Embedding `moor` in your app
 
 API Reference: https://pkg.go.dev/github.com/walles/moor/v2/pkg/moor
@@ -432,6 +464,9 @@ go mod tidy
 You can also `PageFromStream()` or `PageFromFile()`.
 
 # Developing
+
+The `twin` directory contains the library used by `moor` for drawing to the
+terminal screen. See [its README](twin/README.md) for details.
 
 You need the [go tools](https://golang.org/doc/install).
 
