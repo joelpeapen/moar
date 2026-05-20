@@ -172,7 +172,7 @@ Moving around
 * > / 'G' to go to the end of the document
 * 'h', 'l' for left and right (as in vim)
 * Half page 'u'p / 'd'own, or CTRL-u / CTRL-d
-* CTRL-a moves to the leftmost position
+* CTRL-a / 0 moves to the leftmost position
 * RETURN moves down one line
 
 Switching files (if you opened multiple files)
