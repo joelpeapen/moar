@@ -33,6 +33,11 @@ func rowsToString(cellLines []textstyles.CellWithMetadataSlice) string {
 }
 
 func assertWrap(t *testing.T, input string, widthInScreenCells int, wrappedLines ...string) {
+	// Temporarily disable the minimum wrap width for tests
+	originalMinWrapWidth := minWrapWidth
+	minWrapWidth = 0
+	t.Cleanup(func() { minWrapWidth = originalMinWrapWidth })
+
 	toWrap := tokenize(input)
 	wrapped := wrapLine(widthInScreenCells, toWrap)
 	actual := make([]textstyles.CellWithMetadataSlice, len(wrapped))
@@ -84,7 +89,7 @@ func TestLeadingSpaceNoWrap(t *testing.T) {
 }
 
 func TestLeadingSpaceWithWrap(t *testing.T) {
-	assertWrap(t, " abc", 2, " a", "bc")
+	assertWrap(t, " abc", 2, " a", " b", " c")
 }
 
 func TestLeadingWrappedSpace(t *testing.T) {
@@ -146,6 +151,16 @@ func TestGetWrapCountWideChars(t *testing.T) {
 	assert.Equal(t, getWrapCount(line, 3), 2)
 	assert.Equal(t, getWrapCount(line, 2), 1)
 	assert.Equal(t, getWrapCount(line, 1), 1)
+}
+
+func TestGetHangingIndentWidth(t *testing.T) {
+	assert.Equal(t, 0, getHangingIndentWidth(tokenize("")))
+	assert.Equal(t, 0, getHangingIndentWidth(tokenize("hello")))
+	assert.Equal(t, 3, getHangingIndentWidth(tokenize("   hello")))
+	assert.Equal(t, 6, getHangingIndentWidth(tokenize("   1. numbered list")))
+
+	// Can be found on man pages
+	assert.Equal(t, 7, getHangingIndentWidth(tokenize("   -D  after the double (more-than-one) space")))
 }
 
 func BenchmarkWrapLine(b *testing.B) {

@@ -364,6 +364,18 @@ func noLineNumbersDefault() bool {
 	return false
 }
 
+// unescapeManPn removes escaping inserted by GNU man's escape_less function.
+// It escapes ? : . % \ with a backslash.
+func unescapeManPn(manPn string) string {
+	return strings.NewReplacer(
+		`\?`, `?`,
+		`\:`, `:`,
+		`\.`, `.`,
+		`\%`, `%`,
+		`\\`, `\`,
+	).Replace(manPn)
+}
+
 // Return complete version when built with build.sh or fallback to module version (i.e. "go install")
 func getVersion() string {
 	if versionString != "" {
@@ -564,7 +576,7 @@ func pagerFromArgs(
 		stdinName = os.Getenv("PAGER_LABEL")
 	} else if os.Getenv("MAN_PN") != "" {
 		// MAN_PN is set by GNU man. Example value: "printf(1)"
-		stdinName = os.Getenv("MAN_PN")
+		stdinName = unescapeManPn(os.Getenv("MAN_PN"))
 	}
 
 	// Display the input file(s) contents

@@ -18,6 +18,17 @@ func TestParseScrollHint(t *testing.T) {
 	})
 }
 
+func TestUnescapeManPn(t *testing.T) {
+	assert.Equal(t, unescapeManPn(`printf(1)`), `printf(1)`)
+	assert.Equal(t, unescapeManPn(`xpcservice\.plist(5)`), `xpcservice.plist(5)`)
+	assert.Equal(t, unescapeManPn(`foo\:bar\%baz\?qux`), `foo:bar%baz?qux`)
+	assert.Equal(t, unescapeManPn(`a\\b`), `a\b`)
+
+	// Trailing backslash or unknown escapes (should just be preserved)
+	assert.Equal(t, unescapeManPn(`a\`), `a\`)
+	assert.Equal(t, unescapeManPn(`a\b`), `a\b`)
+}
+
 func TestPageOneInputFile(t *testing.T) {
 	pager, screen, _, formatter, _, err := pagerFromArgs(
 		[]string{"", "moor_test.go"},

@@ -74,6 +74,14 @@ func (m *PagerModeSearch) moveSearchHistoryIndex(delta int) {
 	}
 }
 
+// Exit search mode, skip back to where we started
+func (m *PagerModeSearch) abort() {
+	m.pager.searchHistory.addEntry(m.inputBox.text)
+	m.pager.mode = PagerModeViewing{pager: m.pager}
+	m.pager.scrollPosition = m.initialScrollPosition
+	m.pager.setTargetLine(nil) // Viewing doesn't need all lines
+}
+
 func (m *PagerModeSearch) onKey(key twin.KeyCode) {
 	if m.inputBox.handleKey(key) {
 		m.searchHistoryIndex = len(m.pager.searchHistory.entries) // Reset history index when user types
@@ -88,10 +96,7 @@ func (m *PagerModeSearch) onKey(key twin.KeyCode) {
 		m.pager.setTargetLine(nil) // Viewing doesn't need all lines
 
 	case twin.KeyEscape:
-		m.pager.searchHistory.addEntry(m.inputBox.text)
-		m.pager.mode = PagerModeViewing{pager: m.pager}
-		m.pager.scrollPosition = m.initialScrollPosition
-		m.pager.setTargetLine(nil) // Viewing doesn't need all lines
+		m.abort()
 
 	case twin.KeyPgUp, twin.KeyPgDown:
 		m.pager.searchHistory.addEntry(m.inputBox.text)
@@ -111,6 +116,12 @@ func (m *PagerModeSearch) onKey(key twin.KeyCode) {
 }
 
 func (m *PagerModeSearch) onRune(char rune) {
+	// Handle ctrl-c
+	if char == '\x03' {
+		m.abort()
+		return
+	}
+
 	m.searchHistoryIndex = len(m.pager.searchHistory.entries) // Reset history index when user types
 	m.inputBox.handleRune(char)
 	m.userEditedText = m.inputBox.text
