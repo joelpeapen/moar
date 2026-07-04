@@ -14,6 +14,12 @@ import (
 	"golang.org/x/term"
 )
 
+func reassertTtyOutMode(_ *os.File) {
+	// This block intentionally left blank.
+	//
+	// See the implementation in twin/screen-setup-windows.go for info.
+}
+
 func (r *interruptableReader) waitForReadReady(timeout time.Duration) (ready bool, err error) {
 	// "This argument should be set to the highest-numbered file descriptor in
 	// any of the three sets, plus 1. The indicated file descriptors in each set

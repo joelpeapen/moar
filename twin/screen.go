@@ -234,6 +234,8 @@ func (screen *UnixScreen) Events() chan Event {
 //
 // You must hold renderLock when calling this method.
 func (screen *UnixScreen) writeLocked(s string) int {
+	reassertTtyOutMode(screen.ttyOut)
+
 	bytesWritten, err := screen.ttyOut.Write([]byte(s))
 	if err != nil {
 		panic(err)
