@@ -63,46 +63,56 @@ func waitForPipeReadReady(handle windows.Handle) (ready bool, err error) {
 	return false, fmt.Errorf("PeekNamedPipe failed: %w", callErr)
 }
 
-// cmd.exe resets the console modes behind our back, both while running batch
-// files and when the process piping into moor terminates. We cannot detect
-// when that happens, so instead we re-apply the flags we need before every
-// tty read and write, leaving all other flags untouched.
+// Make sure the given console mode flags are set / cleared, leaving all other
+// flags untouched.
+//
+// Called both at setup and before every tty read and write. The repetition is
+// needed because cmd.exe resets the console modes behind our back, both while
+// running batch files and when the process piping into moor terminates. We
+// cannot detect when that happens, so we just keep re-applying the flags we
+// need.
 //
 // less does the same thing.
 //
 // Ref: https://github.com/walles/moor/issues/394
-func reassertConsoleMode(handle windows.Handle, setFlags uint32, clearFlags uint32) {
+func reassertConsoleMode(handle windows.Handle, setFlags uint32, clearFlags uint32) error {
 	var currentMode uint32
 	err := windows.GetConsoleMode(handle, &currentMode)
 	if err != nil {
 		// Not a console, nothing to re-assert
-		return
+		return nil
 	}
 
 	wantedMode := (currentMode | setFlags) &^ clearFlags
 	if wantedMode == currentMode {
-		return
+		return nil
 	}
 
 	err = windows.SetConsoleMode(handle, wantedMode)
 	if err != nil {
-		log.Debug(fmt.Sprintf("Failed to change console mode from %#x to %#x: %v", currentMode, wantedMode, err))
-		return
+		return fmt.Errorf("failed to change console mode from %#x to %#x: %w", currentMode, wantedMode, err)
 	}
 
-	log.Debug(fmt.Sprintf("Console mode changed behind our back, set it back from %#x to %#x", currentMode, wantedMode))
+	log.Debug(fmt.Sprintf("Console mode changed from %#x to %#x", currentMode, wantedMode))
+	return nil
 }
 
 // Re-apply the ttyIn console mode set by setupTtyInTtyOut(), in case cmd.exe
 // has reset it.
 func reassertTtyInMode(ttyIn *os.File) {
-	reassertConsoleMode(windows.Handle(ttyIn.Fd()), ttyInSetFlags, ttyInClearFlags)
+	err := reassertConsoleMode(windows.Handle(ttyIn.Fd()), ttyInSetFlags, ttyInClearFlags)
+	if err != nil {
+		log.Debug(fmt.Sprint("Re-asserting ttyIn console mode: ", err))
+	}
 }
 
 // Re-apply the ttyOut console mode set by setupTtyInTtyOut(), in case cmd.exe
 // has reset it.
 func reassertTtyOutMode(ttyOut *os.File) {
-	reassertConsoleMode(windows.Handle(ttyOut.Fd()), ttyOutSetFlags, 0)
+	err := reassertConsoleMode(windows.Handle(ttyOut.Fd()), ttyOutSetFlags, 0)
+	if err != nil {
+		log.Debug(fmt.Sprint("Re-asserting ttyOut console mode: ", err))
+	}
 }
 
 func (r *interruptableReader) waitForReadReady(timeout time.Duration) (ready bool, err error) {
@@ -198,7 +208,7 @@ func (screen *UnixScreen) setupTtyInTtyOut() error {
 	if err != nil {
 		return fmt.Errorf("failed to get stdin console mode: %w", err)
 	}
-	err = windows.SetConsoleMode(stdin, (screen.oldTtyInMode|ttyInSetFlags)&^ttyInClearFlags)
+	err = reassertConsoleMode(stdin, ttyInSetFlags, ttyInClearFlags)
 	if err != nil {
 		return fmt.Errorf("failed to set stdin console mode: %w", err)
 	}
@@ -212,7 +222,7 @@ func (screen *UnixScreen) setupTtyInTtyOut() error {
 		screen.restoreTtyInTtyOut() // Error intentionally ignored, report the first one only
 		return fmt.Errorf("failed to get stdout console mode: %w", err)
 	}
-	err = windows.SetConsoleMode(stdout, screen.oldTtyOutMode|ttyOutSetFlags)
+	err = reassertConsoleMode(stdout, ttyOutSetFlags, 0)
 	if err != nil {
 		screen.restoreTtyInTtyOut() // Error intentionally ignored, report the first one only
 		return fmt.Errorf("failed to set stdout console mode: %w", err)
