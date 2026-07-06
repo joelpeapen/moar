@@ -56,6 +56,33 @@ func (r *interruptableReader) Read(p []byte) (n int, err error) {
 			return 0, io.EOF
 		}
 
+		// Other processes can (and do) reset the terminal mode behind our back.
+		// We cannot detect that happening, so we just keep re-applying the mode
+		// we need here, since this loop runs at least once every
+		// interruptableReaderMaxWait.
+		//
+		// This must happen even when there is nothing to read: in cooked mode
+		// keystrokes are line buffered by the kernel, so they don't make our fd
+		// readable until the user presses enter. Waiting with the re-assert
+		// until we have something to read would be waiting for input that
+		// cannot arrive.
+		//
+		// The semaphore makes sure we never re-assert while the terminal mode
+		// has intentionally been restored, by PauseAndCall() or by Close().
+		//
+		// Refs:
+		//   - https://github.com/walles/moor/issues/443
+		//   - https://github.com/walles/moor/issues/394
+		if r.pauseOrRead.TryAcquire(1) {
+			reassertTtyInMode(r.base)
+			r.pauseOrRead.Release(1)
+		}
+
+		// If the terminal mode gets reset while we're waiting here, the
+		// re-assert at the top of the next iteration will sort it out. Any
+		// keystrokes made in the meantime will be line buffered by the kernel,
+		// and become readable once we're back in raw mode during the next
+		// iteration.
 		ready, waitErr := r.waitForReadReady(interruptableReaderMaxWait)
 		if waitErr != nil {
 			return 0, waitErr

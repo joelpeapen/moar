@@ -66,11 +66,11 @@ func waitForPipeReadReady(handle windows.Handle) (ready bool, err error) {
 // Make sure the given console mode flags are set / cleared, leaving all other
 // flags untouched.
 //
-// Called both at setup and before every tty read and write. The repetition is
-// needed because cmd.exe resets the console modes behind our back, both while
-// running batch files and when the process piping into moor terminates. We
-// cannot detect when that happens, so we just keep re-applying the flags we
-// need.
+// Called at setup, from the interruptableReader.Read() loop, and before every
+// tty write. The repetition is needed because cmd.exe resets the console modes
+// behind our back, both while running batch files and when the process piping
+// into moor terminates. We cannot detect when that happens, so we just keep
+// re-applying the flags we need.
 //
 // less does the same thing.
 //
@@ -136,9 +136,6 @@ func (r *interruptableReader) waitForReadReady(timeout time.Duration) (ready boo
 		time.Sleep(timeout / 2)
 		return
 	}
-
-	// We're reading from the console
-	reassertTtyInMode(r.base)
 
 	timeoutMillis := uint32(timeout.Milliseconds())
 	if timeoutMillis == 0 {

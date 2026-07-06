@@ -214,6 +214,10 @@ func (screen *UnixScreen) Close() {
 	// Tell our main loop to exit
 	screen.ttyInReader.Interrupt()
 
+	// Prevent the reader from re-asserting our terminal mode after we restore
+	// it below. The screen is going away, so we never unpause.
+	screen.ttyInReader.SetPaused(true)
+
 	screen.leaveAlternateScreenSession()
 
 	err := screen.restoreTtyInTtyOut()
