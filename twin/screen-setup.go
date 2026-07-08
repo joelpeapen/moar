@@ -44,11 +44,12 @@ func reassertTtyInMode(ttyIn *os.File) {
 
 	after, err := term.GetState(fd)
 	if err != nil {
+		log.Debug(fmt.Sprint("Re-asserting raw terminal mode, reading state back: ", err))
 		return
 	}
 
 	if !reflect.DeepEqual(before, after) {
-		log.Debug("Terminal mode was reset behind our back, raw mode re-asserted")
+		log.Info("Terminal mode was reset behind our back, raw mode re-asserted")
 	}
 }
 

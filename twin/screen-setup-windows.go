@@ -108,6 +108,12 @@ func reassertTtyInMode(ttyIn *os.File) {
 
 // Re-apply the ttyOut console mode set by setupTtyInTtyOut(), in case cmd.exe
 // has reset it.
+//
+// Note that this can run after Close() has restored the original console
+// modes: ReprintAfterExit() renders through writeLocked() to leave the last
+// screen visible in the terminal. That reprint needs our flags to render
+// correctly, so we knowingly leave them enabled on exit. Should be harmless,
+// they are enabled by default in modern terminals.
 func reassertTtyOutMode(ttyOut *os.File) {
 	err := reassertConsoleMode(windows.Handle(ttyOut.Fd()), ttyOutSetFlags, 0)
 	if err != nil {
