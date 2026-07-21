@@ -5,6 +5,7 @@ import (
 	"math"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"runtime"
 	"strings"
 
@@ -110,6 +111,19 @@ func pickAnEditor() (string, string, error) {
 	return "", "", fmt.Errorf("No editor found, tried: $VISUAL, $EDITOR, %s", strings.Join(candidates, ", "))
 }
 
+// check if the editor can accept "+LINENUMBER" argument
+func editorAcceptsPlusLine(editorCommand string) bool {
+	base := strings.ToLower(filepath.Base(editorCommand))
+	base = strings.TrimSuffix(base, ".exe")
+
+	// hardcode known editors for now
+	switch base {
+	case "vim", "vi", "nvim", "nano", "emacs":
+		return true
+	}
+	return false
+}
+
 func handleEditingRequest(p *Pager) {
 	if os.Getenv("LESSSECURE") == "1" {
 		p.mode = &PagerModeInfo{
@@ -185,9 +199,18 @@ func handleEditingRequest(p *Pager) {
 		// NOTE: If you do any changes here, make sure they work with both "nano"
 		// and "code -w" (VSCode).
 		commandWithArgs := strings.Fields(editor)
+
+		lineInfo := ""
+		// add line number argument if editor is supported
+		if topLine := p.lineIndex(); topLine != nil && editorAcceptsPlusLine(commandWithArgs[0]) {
+			lineNumber := topLine.Index() + 1
+			lineInfo = fmt.Sprintf(" (at line %d)", lineNumber)
+			commandWithArgs = append(commandWithArgs, fmt.Sprintf("+%d", lineNumber))
+		}
+
 		commandWithArgs = append(commandWithArgs, fileToEdit)
 
-		log.Info("'v' pressed, launching editor: ", commandWithArgs)
+		log.Info("'v' pressed, launching editor", lineInfo, ": ", commandWithArgs)
 		command := exec.Command(commandWithArgs[0], commandWithArgs[1:]...)
 
 		if runtime.GOOS == "windows" {
