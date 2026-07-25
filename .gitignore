@@ -1,5 +1,6 @@
 /moor
 /moor.exe
+/releases/moor.exe
 /releases/moor-*
 
 # For historical reasons, this old name had to be changed to get into Debian
