@@ -1,0 +1,3 @@
+# cmd.exe is unforgiving about batch files with Unix line endings, and these are
+# read by the Windows test VM. See WINDOWS-VM.md.
+*.bat text eol=crlf

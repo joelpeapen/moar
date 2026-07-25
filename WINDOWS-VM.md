@@ -6,9 +6,11 @@ that differs from Unix. This is a walkthrough for setting up a throwaway Windows
 VM in [VirtualBox](https://www.virtualbox.org/) on macOS or Linux to do that
 testing.
 
-The deterministic parts — creating and starting the VM — live in
-`scripts/windows-vm.sh`. The rest is prose because it can't be scripted: the
-Windows install is an interactive wizard that would need a lot of
+Three scripts carry the parts that can be automated: `scripts/windows-vm.sh`
+creates and starts the VM, `scripts/windows-vm-bootstrap.bat` does the in-guest
+setup, and `scripts/windows-vm-run.sh` runs a command in the guest and prints its
+output on the host. What's left is prose because it genuinely can't be scripted:
+the Windows install is an interactive wizard that would need a lot of
 `Autounattend.xml` machinery to automate, and the actual testing is you pressing
 keys and watching.
 
@@ -80,20 +82,74 @@ Skip OOBE entirely instead. On any OOBE screen press
 mode**: Windows reboots straight to the desktop as the built-in Administrator. A
 *System Preparation Tool* (Sysprep) dialog opens on top — just close it, don't
 run sysprep. Audit mode survives reboots, and a local Administrator desktop is
-all you need to run moor in `cmd.exe`, so this is a perfectly good place to stop.
-You never have to finish OOBE or create a user account.
+all you need to run moor in `cmd.exe`. You never have to finish OOBE or create a
+user account.
+
+It does have a price on evaluation media — see [The hourly
+shutdown](#the-hourly-shutdown).
 
 Audit mode is bare: the taskbar has no icons, Start search doesn't respond, and
 File Explorer tends to crash (a black flash, then nothing). Ignore all of it —
 you work entirely from a command prompt. Open one through **Task Manager**
 (<kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>Esc</kbd> → *File → Run new task* → `cmd`,
-ticking *Create this task with administrative privileges*).
+ticking *Create this task with administrative privileges*). You only need that
+dance once; the bootstrap script below arranges for one to open by itself on every
+boot.
+
+## The hourly shutdown
+
+On evaluation media, an audit-mode guest powers itself off roughly once an hour,
+and the desktop watermark reads "Windows License is expired" from the very first
+boot. The ISO is fine and so is your install: OOBE's specialize pass is what
+starts the 90-day evaluation clock, and audit mode skips OOBE, so the clock is
+never armed. An expired *evaluation* edition forces a shutdown every hour of
+uptime, and an unarmed one counts as expired.
+
+To confirm rather than guess, from an admin prompt:
+
+```cmd
+cscript //nologo C:\Windows\System32\slmgr.vbs /dlv
+```
+
+On a guest installed minutes ago this reports `License Status: Notification`,
+`Notification Reason: 0xC004F009 (grace time expired)` and a
+`GracePeriodRemaining` of 0 — a grace period that was never started, not one
+that ran out.
+
+So the working rule is: **a cold boot buys about an hour**. The timer restarts on
+every boot, so rebooting costs a minute and hands you a fresh hour. Half an hour
+of uninterrupted testing is entirely practical; a two-hour session is not.
+
+Snapshots interact with this in a way that will bite you. Restoring a
+*saved-state* snapshot resumes the guest with its shutdown timer already almost
+elapsed, so you get a few minutes and then a shutdown, over and over. Take
+snapshots with the VM **powered off** instead — those cold-boot on restore and
+give you the full hour.
+
+Four things look like fixes and are not, so don't spend an evening on them:
+
+* `slmgr /rearm` — resets a timer that audit mode never arms, so the status does
+  not change. It also burns one of the (few) available rearms.
+* Rolling the guest clock back with `VBoxManage modifyvm --biossystemtimeoffset`
+  — the licence has no expiry date to escape; `EvaluationEndDate` is unset
+  (reported as `1601-01-01`, the zero FILETIME).
+* Installing a volume (GVLK) product key to move off the `Eval` SKU — refused
+  with `0xC004F069`, "product SKU not found", because evaluation media doesn't
+  contain the non-eval edition's licence files at all.
+* Going back and finishing OOBE, even with a working network — `sysprep /oobe`
+  re-enters OOBE, but 24H2 loops: *Hi there* → *"Why did my PC restart?"* →
+  update → reboot → *Hi there*. Handing OOBE an `unattend.xml` in
+  `C:\Windows\Panther` doesn't break the loop either.
+
+The only real escape is to never enter audit mode: install with an
+`Autounattend.xml` that completes OOBE unattended, which avoids the crash loop and
+arms the clock properly. That's a bigger job than this walkthrough covers.
 
 ## After the install
 
 You're now at the audit-mode desktop, working from a `cmd` prompt.
 
-1. **Install Guest Additions** so the shared folder and clipboard work. Choose
+1. **Install Guest Additions** so the shared folder works. Choose
    *Devices → Insert Guest Additions CD image* from the VirtualBox menu, then run
    the installer straight from your prompt — audit mode's flaky Explorer makes
    the CD autorun unreliable, so don't wait for it:
@@ -104,20 +160,47 @@ You're now at the audit-mode desktop, working from a `cmd` prompt.
 
    Click through it and reboot (back into audit mode).
 
-2. **Snapshot the clean state** so you can reset to it between test runs instead
-   of reinstalling:
+2. **Run the bootstrap script**, which does the rest of the in-guest setup in one
+   go — there's nothing to type but this one line:
+
+   ```cmd
+   \\VBOXSVR\windows-vm-io\bootstrap.bat
+   ```
+
+   It puts the shared folder on the `PATH`, arranges for an elevated `cmd` to open
+   itself on every boot (because you'll be rebooting hourly, and the Task Manager
+   dance gets old fast), drops a `runcmd` shim in `C:\Windows` so
+   `scripts/windows-vm-run.sh` works in any prompt, clears the Administrator
+   password, and prints the licence status so you know what you're dealing with.
+
+   That password has to stay **blank**: audit mode's automatic logon depends on
+   it, so setting one lands you at a logon screen on every boot instead of the
+   desktop. And `setx` only affects *new* prompts, so close this `cmd` and let the
+   next boot hand you a fresh one.
+
+3. **Snapshot the clean state** so you can reset to it between test runs instead
+   of reinstalling. Do this last, so the snapshot captures Guest Additions and the
+   bootstrapped setup rather than losing them on every restore. Shut the guest down
+   from its prompt and snapshot it powered off, so restoring gives you a cold boot
+   and a full hour before [the hourly shutdown](#the-hourly-shutdown):
+
+   ```cmd
+   shutdown /s /t 0
+   ```
 
    ```bash
    VBoxManage snapshot moor-windows-test take clean-install \
-       --description "Audit-mode desktop + Guest Additions"
+       --description "Audit-mode desktop, Guest Additions, bootstrapped"
    ```
 
 ## Getting moor.exe into the VM
 
-`scripts/windows-vm.sh` already shared the repo's `releases` folder into the VM,
-so binaries you build on the host show up inside the guest on an auto-mounted
-drive, or at `\\VBOXSVR\releases`. The share is read-only, which is all moor
-needs — you run binaries straight off it, no copying.
+`scripts/windows-vm.sh` shares one directory into the guest: `.windows-vm-io`,
+which appears there as `\\VBOXSVR\windows-vm-io` and on an auto-mounted drive
+letter. Everything crossing between host and guest goes through it — binaries,
+batch files, command output — and the bootstrap script put it on the guest's
+`PATH`. It's writable, which is what lets the guest hand results back; see
+[`.windows-vm-io/README.md`](.windows-vm-io/README.md).
 
 Build what you want to test on the host:
 
@@ -125,21 +208,14 @@ Build what you want to test on the host:
 scripts/windows-build.sh
 ```
 
-This cross-compiles two Windows binaries into `releases/` under stable names:
-`moor.exe` from the current branch and `moor-master.exe` from master. Comparing a
-branch against master is the usual reason to test on Windows in the first place;
-if you only care about one tree, `GOOS=windows GOARCH=amd64 ./build.sh` builds
-just that under its version-stamped name.
+This cross-compiles two Windows binaries into `.windows-vm-io/` under stable
+names: `moor.exe` from the current branch and `moor-master.exe` from master.
+Comparing a branch against master is the usual reason to test on Windows in the
+first place; if you only care about one tree,
+`GOOS=windows GOARCH=amd64 ./build.sh` builds just that under its version-stamped
+name.
 
-Then, **once per VM**, put the share on the guest's `PATH` from an admin `cmd`:
-
-```cmd
-setx PATH "%PATH%;\\VBOXSVR\releases"
-```
-
-`setx` only affects *new* command prompts, so close that `cmd` and open a fresh
-one (Task Manager → *File → Run new task* → `cmd`) before the change takes
-effect. `where moor` should then print the path on the share. From then on you
+`where moor` in the guest should print the path on the share. From then on you
 just type:
 
 ```cmd
@@ -152,6 +228,74 @@ Because `PATH` points at the share, every host rebuild is picked up
 automatically: rerun `scripts/windows-build.sh` on the host and the next `moor`
 in the guest is the new build, with nothing to do guest-side.
 
+## Driving the guest from the host
+
+The actual testing is you at the VM window, but for setup and diagnostics it's
+much faster to run things from a host shell and get the output back as text:
+
+```bash
+scripts/windows-vm-run.sh 'cscript //nologo C:\Windows\System32\slmgr.vbs /dlv'
+```
+
+That needs the VM running with a `cmd` prompt focused. Interactive programs are
+not usable this way — moor itself included — because nothing reads their output
+until they exit and there's no terminal to drive. For those, you're at the VM
+window pressing keys, which was the point of the VM.
+
+The rest of this section is how it works, which is what you need when it doesn't.
+
+**Screenshots** are the fallback for anything on screen that never lands in a
+file, and for OOBE, where no prompt exists yet:
+
+```bash
+VBoxManage controlvm moor-windows-test screenshotpng /tmp/vm.png
+```
+
+**Keystrokes** go in with `keyboardputstring`, which types into whatever has focus
+inside the guest; `keyboardputscancode 1c 9c` is Return (the make and break codes
+for that key):
+
+```bash
+VBoxManage controlvm moor-windows-test keyboardputstring 'runcmd'
+VBoxManage controlvm moor-windows-test keyboardputscancode 1c 9c
+```
+
+Beware that this sends **US scancodes**, which the guest re-maps through its own
+keyboard layout. On a Swedish guest, `:` arrives as `Ö`, `\` as `'`, `|` as `*`
+and `/` as `-` — so letters and digits survive and anything with punctuation is
+quietly corrupted. That's why `windows-vm-run.sh` types nothing but the
+letters-only name `runcmd`, and why picking the US layout during install is worth
+doing anyway.
+
+**Files carry everything else.** The host writes the real command into
+`.windows-vm-io/runcmd.bat` and the guest redirects stdout, stderr and the exit
+code back into `out.txt` on the same share for the host to read. `runcmd` resolves
+through a one-line shim in `C:\Windows`, which is on the `PATH` of every prompt
+including ones older than bootstrap. The guest console gets the command printed
+into it as well, so a session is followable from the VM window — via `type` of a
+file rather than `echo`, which would let a `>` or `&` in the command take effect.
+Use CRLF line endings, `.bat` files being what they are; `.gitattributes` pins
+that for the ones under version control. A sentinel line written last is how the
+host knows the guest has finished rather than guessing with a sleep.
+
+Four approaches that look promising but don't work on this guest:
+
+* `VBoxManage guestcontrol ... run` can't log in as the audit-mode
+  Administrator. It fails with "The specified user account on the guest is
+  restricted and can't be used to logon" (`ERROR_ACCOUNT_RESTRICTION`), and
+  giving the account a real password with `net user` doesn't change that.
+* Pasting through the shared clipboard. <kbd>Ctrl</kbd>+<kbd>V</kbd> in
+  `cmd.exe` produces nothing, even with `Clipboard Mode: Bidirectional` and
+  Guest Additions installed.
+* A scheduled task with an at-logon trigger, as a way to get that prompt on every
+  boot. Audit mode's automatic logon raises no logon event for Task Scheduler, so
+  the task stays `Ready` with `Last Result: 267011` ("has not yet run") forever.
+  A `Run` key works instead, though it takes about a minute after the desktop
+  appears — long enough to look broken when it isn't.
+* `VBoxManage controlvm ... acpipowerbutton` to shut the guest down. Nothing
+  happens; the Sysprep dialog sitting on the audit-mode desktop is the likely
+  culprit. Use `shutdown /s /t 0` in the guest.
+
 ## Per-session summary
 
 Once the VM exists and the shared folder is wired, each testing session is just:
@@ -160,6 +304,10 @@ Once the VM exists and the shared folder is wired, each testing session is just:
 scripts/windows-build.sh   # rebuild moor.exe (branch) + moor-master.exe (master)
 scripts/windows-vm.sh      # start the VM (or reset to the snapshot first)
 ```
+
+On evaluation media, budget for rebooting the guest every hour, and let
+`windows-vm.sh` cold boot it rather than resuming saved state — see [The hourly
+shutdown](#the-hourly-shutdown).
 
 ## Host CPU while it's running
 
@@ -171,6 +319,6 @@ busy at all times, and virtualization amplifies each timer tick and privileged
 instruction into host overhead. The VM is already tuned for this — Hyper-V
 paravirtualization and nested paging are on — so there's nothing to fix.
 
-The cheap fix is simply not to leave it running. This is a throwaway VM, so save
-its state or power it off between test sessions; `scripts/windows-vm.sh` brings it
-back in seconds.
+The cheap fix is simply not to leave it running. This is a throwaway VM, so power
+it off between test sessions — not save its state, which resumes an
+almost-elapsed shutdown timer. `scripts/windows-vm.sh` boots it back in seconds.
