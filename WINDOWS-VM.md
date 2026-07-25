@@ -115,44 +115,50 @@ You're now at the audit-mode desktop, working from a `cmd` prompt.
 ## Getting moor.exe into the VM
 
 `scripts/windows-vm.sh` already shared the repo's `releases` folder into the VM,
-so you just cross-compile on the host and the binaries show up inside the guest
-on an auto-mounted drive, or at `\\VBOXSVR\releases`. The share is read-only,
-which is all moor needs — run binaries straight off it, no copying:
+so binaries you build on the host show up inside the guest on an auto-mounted
+drive, or at `\\VBOXSVR\releases`. The share is read-only, which is all moor
+needs — you run binaries straight off it, no copying.
 
-```cmd
-\\VBOXSVR\releases\moor-<version>-windows-amd64.exe C:\Windows\System32\drivers\etc\hosts
-```
-
-Piping into moor works the same way:
-
-```cmd
-dir /s C:\Windows | \\VBOXSVR\releases\moor-<version>-windows-amd64.exe
-```
-
-(`cmd` refuses to use a UNC path as its current directory, so launch moor by its
-full `\\VBOXSVR\...` path rather than `cd`-ing into the share first.)
-
-To compare a branch against master — often what you want when verifying a
-Windows fix — build both. The version string is baked into each filename, so
-they don't collide:
+Build what you want to test on the host:
 
 ```bash
-# Current branch:
-GOOS=windows GOARCH=amd64 ./build.sh
-
-# master, via a throwaway worktree:
-git worktree add /tmp/moor-master master
-( cd /tmp/moor-master && GOOS=windows GOARCH=amd64 ./build.sh )
-cp /tmp/moor-master/releases/moor-*-windows-amd64.exe releases/
+scripts/windows-build.sh
 ```
+
+This cross-compiles two Windows binaries into `releases/` under stable names:
+`moor.exe` from the current branch and `moor-master.exe` from master. Comparing a
+branch against master is the usual reason to test on Windows in the first place;
+if you only care about one tree, `GOOS=windows GOARCH=amd64 ./build.sh` builds
+just that under its version-stamped name.
+
+Then, **once per VM**, put the share on the guest's `PATH` from an admin `cmd`:
+
+```cmd
+setx PATH "%PATH%;\\VBOXSVR\releases"
+```
+
+`setx` only affects *new* command prompts, so close that `cmd` and open a fresh
+one (Task Manager → *File → Run new task* → `cmd`) before the change takes
+effect. `where moor` should then print the path on the share. From then on you
+just type:
+
+```cmd
+moor C:\Windows\System32\drivers\etc\hosts
+dir /s C:\Windows | moor
+moor-master C:\Windows\System32\drivers\etc\hosts
+```
+
+Because `PATH` points at the share, every host rebuild is picked up
+automatically: rerun `scripts/windows-build.sh` on the host and the next `moor`
+in the guest is the new build, with nothing to do guest-side.
 
 ## Per-session summary
 
 Once the VM exists and the shared folder is wired, each testing session is just:
 
 ```bash
-GOOS=windows GOARCH=amd64 ./build.sh     # rebuild whatever you changed
-scripts/windows-vm.sh                    # start the VM (or reset to the snapshot first)
+scripts/windows-build.sh   # rebuild moor.exe (branch) + moor-master.exe (master)
+scripts/windows-vm.sh      # start the VM (or reset to the snapshot first)
 ```
 
 ## Host CPU while it's running
