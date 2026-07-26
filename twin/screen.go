@@ -214,6 +214,10 @@ func (screen *UnixScreen) Close() {
 	// Tell our main loop to exit
 	screen.ttyInReader.Interrupt()
 
+	// Prevent the reader from re-asserting our terminal mode after we restore
+	// it below. The screen is going away, so we never unpause.
+	screen.ttyInReader.SetPaused(true)
+
 	screen.leaveAlternateScreenSession()
 
 	err := screen.restoreTtyInTtyOut()
@@ -234,6 +238,8 @@ func (screen *UnixScreen) Events() chan Event {
 //
 // You must hold renderLock when calling this method.
 func (screen *UnixScreen) writeLocked(s string) int {
+	reassertTtyOutMode(screen.ttyOut)
+
 	bytesWritten, err := screen.ttyOut.Write([]byte(s))
 	if err != nil {
 		panic(err)

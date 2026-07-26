@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"os/signal"
+	"reflect"
 	"runtime/debug"
 	"syscall"
 	"time"
@@ -13,6 +14,65 @@ import (
 	"golang.org/x/sys/unix"
 	"golang.org/x/term"
 )
+
+// Re-apply the raw mode set by setupTtyInTtyOut(), in case some other process
+// has reset the terminal mode behind our back.
+//
+// Node.js does that: it snapshots the terminal mode on startup and restores it
+// on exit. In a "node ... | moor" pipeline, node usually snapshots cooked mode
+// before we go raw, and then puts the terminal back into cooked mode when it
+// exits.
+//
+// Ref: https://github.com/walles/moor/issues/443
+func reassertTtyInMode(ttyIn *os.File) {
+	fd := int(ttyIn.Fd())
+
+	before, err := term.GetState(fd)
+	if err != nil {
+		// Not a terminal, nothing to re-assert
+		return
+	}
+
+	// MakeRaw() reads the current mode and adjusts only the raw mode related
+	// flags, so unrelated settings are preserved and repeated calls are
+	// harmless.
+	_, err = term.MakeRaw(fd)
+	if err != nil {
+		log.Debug(fmt.Sprint("Re-asserting raw terminal mode: ", err))
+		return
+	}
+
+	after, err := term.GetState(fd)
+	if err != nil {
+		log.Debug(fmt.Sprint("Re-asserting raw terminal mode, reading state back: ", err))
+		return
+	}
+
+	if !reflect.DeepEqual(before, after) {
+		log.Info("Terminal mode was reset behind our back, raw mode re-asserted")
+	}
+}
+
+func reassertTtyOutMode(_ *os.File) {
+	// This block intentionally left blank.
+	//
+	// Escape sequence interpretation is done by the terminal emulator, not by
+	// the kernel's termios layer, so our writes work no matter what state the
+	// termios is in.
+	//
+	// In cooked mode our "\r\n" line endings render as "\r\r\n" (ONLCR), but
+	// the extra "\r" is invisible on screen. So there is nothing here worth
+	// fixing.
+	//
+	// Re-asserting the termios state here would even be harmful: unlike the
+	// reads, writes are not synchronized with the intentional cooked mode
+	// restores done by PauseAndCall() and Close(), so we could race with
+	// those and re-raw the terminal right after they restored it.
+	//
+	// On Windows, input and output console modes are separate, and escape
+	// sequence interpretation does depend on the output mode, see the
+	// implementation in twin/screen-setup-windows.go.
+}
 
 func (r *interruptableReader) waitForReadReady(timeout time.Duration) (ready bool, err error) {
 	// "This argument should be set to the highest-numbered file descriptor in
