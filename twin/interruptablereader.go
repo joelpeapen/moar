@@ -17,6 +17,10 @@ type interruptableReader struct {
 	interrupted atomic.Bool
 
 	pauseOrRead semaphore.Weighted
+
+	// Re-apply the terminal mode we need. Replaced in tests, which have no
+	// terminal to observe; production code always wants reassertTtyInMode.
+	reassert func(ttyIn *os.File)
 }
 
 // Basically how long we wait between interrupt checks
@@ -28,6 +32,8 @@ func newInterruptableReader(base *os.File) interruptableReader {
 
 		// Ensures we can either read or be paused, but not both at the same time
 		pauseOrRead: *semaphore.NewWeighted(1),
+
+		reassert: reassertTtyInMode,
 	}
 }
 
@@ -74,7 +80,7 @@ func (r *interruptableReader) Read(p []byte) (n int, err error) {
 		//   - https://github.com/walles/moor/issues/443
 		//   - https://github.com/walles/moor/issues/394
 		if r.pauseOrRead.TryAcquire(1) {
-			reassertTtyInMode(r.base)
+			r.reassert(r.base)
 			r.pauseOrRead.Release(1)
 		}
 
