@@ -11,6 +11,10 @@ Windows. WINDOWS-VM.md walks through the throwaway VirtualBox VM for that, and
 `scripts/windows-vm-run.sh 'some command'` runs a command in that guest and
 prints its output back here.
 
+The guest is on a **US keyboard layout** — keep it, or injected keystrokes get
+their punctuation silently re-mapped. WINDOWS-VM.md also has the scancodes for
+keys that aren't characters, which is what driving moor in the guest takes.
+
 # Fixing Bugs
 
 1. Create a new branch with a sensible name, e.g. `fix-crash-on-search-backwards`.

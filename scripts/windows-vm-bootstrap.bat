@@ -18,6 +18,18 @@ if errorlevel 1 (
     exit /b 1
 )
 
+echo === Switching the keyboard layout to US ===
+rem Injected keystrokes are US scancodes, re-mapped through whatever layout the
+rem guest has. See "Driving the guest from the host" in WINDOWS-VM.md.
+rem
+rem Set-WinUserLanguageList replaces the whole list, so the layout picked during
+rem install goes away rather than lingering as a second one you can Alt+Shift
+rem into by accident. -ErrorAction Stop is what makes powershell.exe exit
+rem non-zero on failure; without it a failed cmdlet still exits 0.
+powershell -NoProfile -Command "Set-WinUserLanguageList -LanguageList en-US -Force -ErrorAction Stop"
+if errorlevel 1 set FAILED=1
+
+echo.
 echo === Putting the shared folder on the PATH ===
 rem Checking the stored value rather than %PATH% keeps this idempotent: %PATH% in
 rem this window predates any earlier run, so it would append a duplicate.

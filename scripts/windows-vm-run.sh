@@ -4,22 +4,23 @@
 # here on the host. See WINDOWS-VM.md for the VM itself.
 #
 # The guest can't be driven directly: VBoxManage guestcontrol refuses to log into
-# the audit-mode Administrator account, and injected keystrokes are re-mapped by
-# the guest's keyboard layout, which corrupts every punctuation character. So this
-# goes around both problems via the shared .windows-vm-io directory:
+# the audit-mode Administrator account, and keystrokes only go one way, so nothing
+# comes back. Both gaps are bridged by the shared .windows-vm-io directory:
 #
 #   1. Write the command into runcmd.bat, which the guest can see.
-#   2. Type "runcmd" at the guest's prompt — letters only, so no layout can
-#      mangle it.
+#   2. Type "runcmd" at the guest's prompt — letters only, so no keyboard layout
+#      can mangle it.
 #   3. Wait for the guest to write stdout, stderr and the exit code back.
 #
 # Needs the VM running with an admin cmd prompt focused. Interactive programs are
 # not usable this way — moor included — because nothing reads their output until
 # they exit, and there's no terminal to drive.
 #
-# Two batch quirks leak through into the command you pass: a bare `%` is eaten by
-# the parser, so `echo 100%` prints `100`, and `for` wants `%%i` where a prompt
-# would take `%i`.
+# Three batch quirks leak through into the command you pass: a bare `%` is eaten by
+# the parser, so `echo 100%` prints `100`; `for` wants `%%i` where a prompt would
+# take `%i`; and a command that is itself a .bat or .cmd file needs an explicit
+# `call`, because otherwise it replaces this script's batch context and the run
+# ends in "cannot find the batch label specified - body" with no output.
 #
 # Usage:
 #   scripts/windows-vm-run.sh 'ver'

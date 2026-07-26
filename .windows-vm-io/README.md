@@ -12,8 +12,8 @@ data back to the host.
 * `out.txt` — written by the guest, read by the host. Holds the command's stdout,
   stderr and exit code.
 
-Passing commands as files is a workaround for two things that don't work on this
-guest; `scripts/windows-vm-run.sh` explains which in its header comment.
+Passing commands as files is how anything gets back out, keystrokes only going one
+way; `scripts/windows-vm-run.sh` gives the full reasoning in its header comment.
 
 Everything here except this README is gitignored: it's transient traffic, not
 source. This README is committed so that the directory exists after a fresh

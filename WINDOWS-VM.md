@@ -56,6 +56,10 @@ the boot fails and you have to reset and retry. After that, click through the
 installer. (We run with a GUI, never headless, because the whole point is typing
 at it.)
 
+When the installer asks for a keyboard layout, pick **US** — see [Driving the
+guest from the host](#driving-the-guest-from-the-host). The bootstrap script below
+switches it over anyway, so a wrong answer here costs nothing.
+
 If Setup complains "This PC can't run Windows 11" despite the TPM above, open a
 command prompt in the installer with <kbd>Shift</kbd>+<kbd>F10</kbd> and add the
 well-known bypass keys, then go back one screen and retry:
@@ -167,7 +171,8 @@ You're now at the audit-mode desktop, working from a `cmd` prompt.
    \\VBOXSVR\windows-vm-io\bootstrap.bat
    ```
 
-   It puts the shared folder on the `PATH`, arranges for an elevated `cmd` to open
+   It switches the keyboard layout to US so injected keystrokes aren't re-mapped,
+   puts the shared folder on the `PATH`, arranges for an elevated `cmd` to open
    itself on every boot (because you'll be rebooting hourly, and the Task Manager
    dance gets old fast), drops a `runcmd` shim in `C:\Windows` so
    `scripts/windows-vm-run.sh` works in any prompt, clears the Administrator
@@ -175,8 +180,8 @@ You're now at the audit-mode desktop, working from a `cmd` prompt.
 
    That password has to stay **blank**: audit mode's automatic logon depends on
    it, so setting one lands you at a logon screen on every boot instead of the
-   desktop. And `setx` only affects *new* prompts, so close this `cmd` and let the
-   next boot hand you a fresh one.
+   desktop. And the layout change and `setx` only affect *new* prompts, so close
+   this `cmd` and let the next boot hand you a fresh one.
 
 3. **Snapshot the clean state** so you can reset to it between test runs instead
    of reinstalling. Do this last, so the snapshot captures Guest Additions and the
@@ -239,8 +244,8 @@ scripts/windows-vm-run.sh 'cscript //nologo C:\Windows\System32\slmgr.vbs /dlv'
 
 That needs the VM running with a `cmd` prompt focused. Interactive programs are
 not usable this way — moor itself included — because nothing reads their output
-until they exit and there's no terminal to drive. For those, you're at the VM
-window pressing keys, which was the point of the VM.
+until they exit and there's no terminal to drive. For those you press keys at the
+guest instead — at the VM window, or with the keystrokes and screenshots below.
 
 The rest of this section is how it works, which is what you need when it doesn't.
 
@@ -252,20 +257,45 @@ VBoxManage controlvm moor-windows-test screenshotpng /tmp/vm.png
 ```
 
 **Keystrokes** go in with `keyboardputstring`, which types into whatever has focus
-inside the guest; `keyboardputscancode 1c 9c` is Return (the make and break codes
-for that key):
+inside the guest; `keyboardputscancode` takes raw scancodes, `1c 9c` being Return:
 
 ```bash
 VBoxManage controlvm moor-windows-test keyboardputstring 'runcmd'
 VBoxManage controlvm moor-windows-test keyboardputscancode 1c 9c
 ```
 
-Beware that this sends **US scancodes**, which the guest re-maps through its own
-keyboard layout. On a Swedish guest, `:` arrives as `Ö`, `\` as `'`, `|` as `*`
-and `/` as `-` — so letters and digits survive and anything with punctuation is
-quietly corrupted. That's why `windows-vm-run.sh` types nothing but the
-letters-only name `runcmd`, and why picking the US layout during install is worth
-doing anyway.
+`keyboardputstring` sends **US scancodes**, which the guest re-maps through its own
+keyboard layout — which is why the bootstrap script puts the guest on a US one.
+That's what makes `keyboardputstring 'set "K=:\|/@[]{}~$"'` arrive as exactly those
+characters. Any other layout leaves letters and digits working while quietly
+corrupting punctuation, so don't change it.
+
+Keys that aren't characters go in as scancode pairs instead, make code then break
+code, from **scan code set 1** — so a key not listed here is easy to look up. The
+extended ones take an `e0` prefix on both codes:
+
+| Key | Make | Break |
+| --- | --- | --- |
+| Return | `1c` | `9c` |
+| Esc | `01` | `81` |
+| Space | `39` | `b9` |
+| Tab | `0f` | `8f` |
+| Backspace | `0e` | `8e` |
+| Left Ctrl | `1d` | `9d` |
+| Left Shift | `2a` | `aa` |
+| Up | `e0 48` | `e0 c8` |
+| Down | `e0 50` | `e0 d0` |
+| Left | `e0 4b` | `e0 cb` |
+| Right | `e0 4d` | `e0 cd` |
+| Page Up | `e0 49` | `e0 c9` |
+| Page Down | `e0 51` | `e0 d1` |
+| Home | `e0 47` | `e0 c7` |
+| End | `e0 4f` | `e0 cf` |
+
+Modifiers are held by sending their make code, then the key, then both break
+codes — <kbd>Ctrl</kbd>+<kbd>C</kbd> is `1d 2e ae 9d`. Several pairs can go in one
+call, so `keyboardputscancode e0 51 e0 d1` is a Page Down, and a screenshot is how
+you see what it did.
 
 **Files carry everything else.** The host writes the real command into
 `.windows-vm-io/runcmd.bat` and the guest redirects stdout, stderr and the exit
