@@ -129,6 +129,10 @@ if vm_exists; then
 
     echo "Starting \"${VM}\"..."
     VBoxManage startvm "${VM}" --type gui
+    echo
+    echo "An elevated cmd prompt opens by itself about a minute after the desktop"
+    echo "appears — an empty desktop before then is not a failure. Waiting for it"
+    echo "beats opening one through Task Manager."
     exit 0
 fi
 

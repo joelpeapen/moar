@@ -61,7 +61,7 @@ rem forces a reboot every hour, so getting a prompt by hand gets old fast.
 rem
 rem A scheduled task with an "at logon" trigger is the tidier-looking mechanism,
 rem but audit mode's automatic logon raises no logon event for Task Scheduler, so
-rem the task sits Ready and never runs. A Run key does fire, a few seconds after
+rem the task sits Ready and never runs. A Run key does fire, about a minute after
 rem the desktop appears, and it's elevated because audit mode logs you in as the
 rem built-in Administrator, whose token isn't UAC-filtered by default.
 reg add "HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\Run" /v moorprompt /t REG_SZ /d "cmd.exe /k" /f

@@ -100,6 +100,10 @@ ticking *Create this task with administrative privileges*). You only need that
 dance once; the bootstrap script below arranges for one to open by itself on every
 boot.
 
+That self-opening prompt lags the desktop by about a minute, so an empty desktop
+right after boot is not a failure. Waiting it out is less work than opening one
+by hand.
+
 ## The hourly shutdown
 
 On evaluation media, an audit-mode guest powers itself off roughly once an hour,
@@ -320,8 +324,7 @@ Four approaches that look promising but don't work on this guest:
 * A scheduled task with an at-logon trigger, as a way to get that prompt on every
   boot. Audit mode's automatic logon raises no logon event for Task Scheduler, so
   the task stays `Ready` with `Last Result: 267011` ("has not yet run") forever.
-  A `Run` key works instead, though it takes about a minute after the desktop
-  appears — long enough to look broken when it isn't.
+  A `Run` key works instead, and its startup delay is the price of that.
 * `VBoxManage controlvm ... acpipowerbutton` to shut the guest down. Nothing
   happens; the Sysprep dialog sitting on the audit-mode desktop is the likely
   culprit. Use `shutdown /s /t 0` in the guest.
@@ -334,6 +337,11 @@ Once the VM exists and the shared folder is wired, each testing session is just:
 scripts/windows-build.sh   # rebuild moor.exe (branch) + moor-master.exe (master)
 scripts/windows-vm.sh      # start the VM (or reset to the snapshot first)
 ```
+
+Each boot lands you at the audit-mode desktop, with an elevated `cmd` appearing
+by itself about a minute later — give it that minute before assuming something
+broke. When you're done, `shutdown /s /t 0` in that prompt powers the guest off
+cleanly.
 
 On evaluation media, budget for rebooting the guest every hour, and let
 `windows-vm.sh` cold boot it rather than resuming saved state — see [The hourly
@@ -350,5 +358,6 @@ instruction into host overhead. The VM is already tuned for this — Hyper-V
 paravirtualization and nested paging are on — so there's nothing to fix.
 
 The cheap fix is simply not to leave it running. This is a throwaway VM, so power
-it off between test sessions — not save its state, which resumes an
-almost-elapsed shutdown timer. `scripts/windows-vm.sh` boots it back in seconds.
+it off with `shutdown /s /t 0` between test sessions — not save its state, which
+resumes an almost-elapsed shutdown timer. `scripts/windows-vm.sh` boots it back in
+seconds, with a usable prompt about a minute later.

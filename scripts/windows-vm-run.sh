@@ -117,7 +117,8 @@ for _ in $(seq "${TIMEOUT_SECONDS}"); do
 done
 
 echo "Gave up after ${TIMEOUT_SECONDS}s waiting for the guest to answer." >&2
-echo "Is a cmd prompt focused in the VM window?" >&2
+echo "Is a cmd prompt focused in the VM window? One opens by itself about a" >&2
+echo "minute after the desktop appears, so a freshly booted guest isn't ready yet." >&2
 
 if [ -s "${OUT_FILE}" ]; then
     echo "Output so far:" >&2
