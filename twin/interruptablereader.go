@@ -64,8 +64,7 @@ func (r *interruptableReader) Read(p []byte) (n int, err error) {
 
 		// Other processes can (and do) reset the terminal mode behind our back.
 		// We cannot detect that happening, so we just keep re-applying the mode
-		// we need here, since this loop runs at least once every
-		// interruptableReaderMaxWait.
+		// we need.
 		//
 		// This must happen even when there is nothing to read: in cooked mode
 		// keystrokes are line buffered by the kernel, so they don't make our fd
@@ -84,11 +83,9 @@ func (r *interruptableReader) Read(p []byte) (n int, err error) {
 			r.pauseOrRead.Release(1)
 		}
 
-		// If the terminal mode gets reset while we're waiting here, the
-		// re-assert at the top of the next iteration will sort it out. Any
-		// keystrokes made in the meantime will be line buffered by the kernel,
-		// and become readable once we're back in raw mode during the next
-		// iteration.
+		// A reset while we're waiting here is fine: the wait is bounded, and
+		// the next re-assert picks it up. Keystrokes made in the meantime stay
+		// buffered by the kernel until then.
 		ready, waitErr := r.waitForReadReady(interruptableReaderMaxWait)
 		if waitErr != nil {
 			return 0, waitErr
@@ -107,6 +104,14 @@ func (r *interruptableReader) Read(p []byte) (n int, err error) {
 		if err != nil {
 			panic(fmt.Errorf("Failed to acquire interruptable reader pause semaphore for reading: %w", err))
 		}
+
+		// The acquire above can have waited out a whole pause, with every
+		// re-assert at the top of the loop skipped throughout it. Re-assert
+		// here, because the read below blocks while holding the semaphore: if
+		// the mode is wrong by then, the top of the loop won't get to fix it
+		// either.
+		r.reassert(r.base)
+
 		n, err = r.base.Read(p)
 		r.pauseOrRead.Release(1)
 
