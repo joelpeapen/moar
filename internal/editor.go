@@ -118,7 +118,7 @@ func editorAcceptsPlusLine(editorCommand string) bool {
 
 	// hardcode known editors for now
 	switch base {
-	case "vim", "vi", "nvim", "nano", "emacs":
+	case "vim", "vi", "nvim", "nano", "pico", "emacs":
 		return true
 	}
 	return false
