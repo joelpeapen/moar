@@ -111,6 +111,17 @@ func pickAnEditor() (string, string, error) {
 	return "", "", fmt.Errorf("No editor found, tried: $VISUAL, $EDITOR, %s", strings.Join(candidates, ", "))
 }
 
+// Returns nil if nothing is being shown.
+func middleVisibleLine(p *Pager) *linemetadata.Index {
+	lines := p.renderLines().lines
+	if len(lines) == 0 {
+		return nil
+	}
+
+	middle := lines[len(lines)/2].inputLineIndex
+	return &middle
+}
+
 // check if the editor can accept "+LINENUMBER" argument
 func editorAcceptsPlusLine(editorCommand string) bool {
 	base := strings.ToLower(filepath.Base(editorCommand))
@@ -202,8 +213,12 @@ func handleEditingRequest(p *Pager) {
 
 		lineInfo := ""
 		// add line number argument if editor is supported
-		if topLine := p.lineIndex(); topLine != nil && editorAcceptsPlusLine(commandWithArgs[0]) {
-			lineNumber := topLine.Index() + 1
+		//
+		// vim / nano / etc all center the requested line on screen, so aim for
+		// the middle of moor's screen to match what the user was actually
+		// looking at.
+		if middleLine := middleVisibleLine(p); middleLine != nil && editorAcceptsPlusLine(commandWithArgs[0]) {
+			lineNumber := middleLine.Index() + 1
 			lineInfo = fmt.Sprintf(" (at line %d)", lineNumber)
 			commandWithArgs = append(commandWithArgs, fmt.Sprintf("+%d", lineNumber))
 		}
