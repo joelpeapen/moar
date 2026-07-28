@@ -93,3 +93,44 @@ func TestReadFromDevFd(t *testing.T) {
 	assert.Equal(t, len(lines.Lines), 1)
 	assert.Equal(t, lines.Lines[0].Plain(), "test")
 }
+
+// Lines are read in fixed size chunks, so a long enough line arrives in several
+// pieces. However long it is, it should come back out in one piece and with the
+// line after it intact.
+func TestLineSpanningMultipleReadBuffers(t *testing.T) {
+	lineLengths := []int{
+		100,
+		byteBufferSize - 1,
+		byteBufferSize,
+		byteBufferSize + 1,
+		100_000,
+		1_000_000,
+	}
+
+	for _, lineLength := range lineLengths {
+		t.Run(strconv.Itoa(lineLength), func(t *testing.T) {
+			// Make the contents position dependent, so that dropped, doubled or
+			// reordered chunks all show up as a mismatch
+			builder := strings.Builder{}
+			for builder.Len() < lineLength {
+				builder.WriteString(strconv.Itoa(builder.Len()))
+				builder.WriteString("-")
+			}
+			longLine := builder.String()[:lineLength]
+
+			fileName := path.Join(t.TempDir(), "long-line.txt")
+			err := os.WriteFile(fileName, []byte(longLine+"\nlast line\n"), 0644)
+			assert.NilError(t, err)
+
+			testMe, err := NewFromFilename(fileName, formatters.TTY, ReaderOptions{Style: styles.Get("native")})
+			assert.NilError(t, err)
+			assert.NilError(t, testMe.Wait())
+
+			lines := testMe.GetLines(linemetadata.Index{}, 10)
+			assert.Equal(t, len(lines.Lines), 2)
+			assert.Equal(t, len(lines.Lines[0].Plain()), lineLength)
+			assert.Equal(t, lines.Lines[0].Plain(), longLine)
+			assert.Equal(t, lines.Lines[1].Plain(), "last line")
+		})
+	}
+}
