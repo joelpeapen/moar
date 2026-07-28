@@ -63,7 +63,7 @@ func StripFormatting(s string, lineIndex linemetadata.Index) string {
 	stripped.Grow(len(s)) // This makes BenchmarkStripFormatting 6% faster
 	runeCount := 0
 
-	styledStringsFromString(twin.StyleDefault, s, &lineIndex, 0, func(str string, style twin.Style) {
+	styledStringsFromString(twin.StyleDefault, s, &lineIndex, 0, func(str string, style twin.Style) int {
 		for _, runeValue := range runesFromStyledString(_StyledString{String: str, Style: style}) {
 			switch runeValue {
 
@@ -103,6 +103,8 @@ func StripFormatting(s string, lineIndex linemetadata.Index) string {
 				runeCount++
 			}
 		}
+
+		return runeCount
 	})
 
 	return stripped.String()
@@ -130,8 +132,17 @@ func StyledRunesFromString(plainTextStyle twin.Style, s string, lineIndex *linem
 	// Specs: https://en.wikipedia.org/wiki/ANSI_escape_code#3-bit_and_4-bit
 	styleUnprintable := twin.StyleDefault.WithBackground(twin.NewColor16(1)).WithForeground(twin.NewColor16(7))
 
-	trailer := styledStringsFromString(plainTextStyle, s, lineIndex, maxCellsCount, func(str string, style twin.Style) {
-		for _, token := range tokensFromStyledString(_StyledString{String: str, Style: style}, maxCellsCount) {
+	trailer := styledStringsFromString(plainTextStyle, s, lineIndex, maxCellsCount, func(str string, style twin.Style) int {
+		// Ask only for the cells we still have room for
+		remainingCellsCount := 0 // Zero means no limit
+		if maxCellsCount > 0 {
+			remainingCellsCount = maxCellsCount - len(cells)
+			if remainingCellsCount <= 0 {
+				return len(cells)
+			}
+		}
+
+		for _, token := range tokensFromStyledString(_StyledString{String: str, Style: style}, remainingCellsCount) {
 			switch token.Rune {
 
 			case '\x09': // TAB
@@ -193,6 +204,8 @@ func StyledRunesFromString(plainTextStyle twin.Style, s string, lineIndex *linem
 				})
 			}
 		}
+
+		return len(cells)
 	})
 
 	return StyledRunesWithTrailer{

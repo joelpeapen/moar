@@ -30,8 +30,11 @@ func TestNextCharLastChar_empty(t *testing.T) {
 
 func collectStyledStrings(s string) ([]_StyledString, twin.Style) {
 	styledStrings := []_StyledString{}
-	trailer := styledStringsFromString(twin.StyleDefault, s, nil, 0, func(str string, style twin.Style) {
+	trailer := styledStringsFromString(twin.StyleDefault, s, nil, 0, func(str string, style twin.Style) int {
 		styledStrings = append(styledStrings, _StyledString{str, style})
+
+		// We render no cells, and we asked for no limit
+		return 0
 	})
 	return styledStrings, trailer
 }
@@ -137,8 +140,11 @@ func TestURLWithEmptyID(t *testing.T) {
 func TestPlainTextColor(t *testing.T) {
 	plainTextStyle := twin.StyleDefault.WithAttr(twin.AttrReverse)
 	styledStrings := []_StyledString{}
-	trailer := styledStringsFromString(plainTextStyle, "a\x1b[33mb\x1b[mc", nil, 0, func(str string, style twin.Style) {
+	trailer := styledStringsFromString(plainTextStyle, "a\x1b[33mb\x1b[mc", nil, 0, func(str string, style twin.Style) int {
 		styledStrings = append(styledStrings, _StyledString{str, style})
+
+		// We render no cells, and we asked for no limit
+		return 0
 	})
 
 	assert.Equal(t, 3, len(styledStrings))

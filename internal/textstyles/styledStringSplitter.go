@@ -17,8 +17,7 @@ type styledStringSplitter struct {
 	lineIndex      *linemetadata.Index // Used for error reporting
 	plainTextStyle twin.Style
 
-	maxReportedRunesCount int
-	reportedRunesCount    int
+	maxCellsCount int
 
 	nextByteIndex     int
 	previousByteIndex int
@@ -29,21 +28,23 @@ type styledStringSplitter struct {
 
 	trailer twin.Style
 
-	callback func(str string, style twin.Style)
+	// Returns the total number of cells rendered so far, counting all calls.
+	// Compared against maxCellsCount.
+	callback func(str string, style twin.Style) int
 }
 
 // Returns the style of the line's trailer.
 //
 // The lineIndex is only used for error reporting.
 //
-// maxReportedRunesCount: stop parsing once this many input runes have been
-// reported to the callback. If 0, there is no limit. For
-// BenchmarkRenderHugeLine() performance.
+// The callback must return the total number of cells it has rendered so far,
+// counting all calls. We can't count that ourselves: input runes are not cells,
+// since man page backspace sequences take several input runes per cell, and a
+// TAB takes one input rune but renders as several cells.
 //
-// Note that input runes are not cells: man page backspace sequences take
-// several input runes per cell, and a TAB takes one input rune but renders as
-// several cells.
-func styledStringsFromString(plainTextStyle twin.Style, s string, lineIndex *linemetadata.Index, maxReportedRunesCount int, callback func(string, twin.Style)) twin.Style {
+// maxCellsCount: stop parsing once the callback reports this many cells. If 0,
+// there is no limit. For BenchmarkRenderHugeLine() performance.
+func styledStringsFromString(plainTextStyle twin.Style, s string, lineIndex *linemetadata.Index, maxCellsCount int, callback func(string, twin.Style) int) twin.Style {
 	if !strings.ContainsAny(s, "\x1b") {
 		// This shortcut makes BenchmarkPlainTextSearch() perform a lot better
 		callback(s, plainTextStyle)
@@ -51,13 +52,13 @@ func styledStringsFromString(plainTextStyle twin.Style, s string, lineIndex *lin
 	}
 
 	splitter := styledStringSplitter{
-		input:                 s,
-		lineIndex:             lineIndex,
-		plainTextStyle:        plainTextStyle, // How plain text should be styled
-		maxReportedRunesCount: maxReportedRunesCount,
-		inProgressStyle:       plainTextStyle, // Plain text style until something else comes along
-		callback:              callback,
-		trailer:               plainTextStyle, // Plain text style until something else comes along
+		input:           s,
+		lineIndex:       lineIndex,
+		plainTextStyle:  plainTextStyle, // How plain text should be styled
+		maxCellsCount:   maxCellsCount,
+		inProgressStyle: plainTextStyle, // Plain text style until something else comes along
+		callback:        callback,
+		trailer:         plainTextStyle, // Plain text style until something else comes along
 	}
 	splitter.run()
 
@@ -478,12 +479,10 @@ func (s *styledStringSplitter) finalizeCurrentPart() {
 		return
 	}
 
-	partString := s.inProgressString.String()
-	s.callback(partString, s.inProgressStyle)
-	s.reportedRunesCount += utf8.RuneCountInString(partString)
+	totalCellsCount := s.callback(s.inProgressString.String(), s.inProgressStyle)
 
-	if s.maxReportedRunesCount > 0 && s.reportedRunesCount >= s.maxReportedRunesCount {
-		// We've reported enough runes, stop processing any further input
+	if s.maxCellsCount > 0 && totalCellsCount >= s.maxCellsCount {
+		// We've reported enough cells, stop processing any further input
 		s.nextByteIndex = len(s.input)
 	}
 }
