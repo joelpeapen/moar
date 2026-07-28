@@ -380,6 +380,35 @@ func TestIssue372(t *testing.T) {
 	assert.Equal(t, len(styled), maxCellsCount)
 }
 
+// The cells count budget is in cells, not in input runes. Man page backspace
+// formatting puts several input runes into one cell, so a line mixing that with
+// ANSI escape sequences must still deliver the full requested number of cells.
+//
+// The escape sequence matters: the budget is only consulted at part boundaries,
+// and a line with no escapes at all takes a plain text shortcut.
+func TestManPageFormattingDeliversRequestedCellsCount(t *testing.T) {
+	const requestedCellsCount = 10
+
+	// Nine cells worth of man page formatting, each cell made from more than one
+	// input rune
+	prefixes := map[string]string{
+		// Five runes per cell: '_', backspace, 𝕏, backspace, 𝕏
+		"bold underline": strings.Repeat("_\b\U0001D54F\b\U0001D54F", 9),
+
+		// Seven runes per cell: '+', backspace, '+', backspace, 'o', backspace, 'o'
+		"bullet": strings.Repeat("+\b+\bo\bo", 9),
+	}
+
+	for name, prefix := range prefixes {
+		t.Run(name, func(t *testing.T) {
+			line := prefix + "\x1b[31m" + strings.Repeat("x", 5000)
+
+			styled := StyledRunesFromString(twin.StyleDefault, line, nil, requestedCellsCount).StyledRunes
+			assert.Equal(t, len(styled), requestedCellsCount)
+		})
+	}
+}
+
 // Benchmark stripping formatting from a colored git diff sample.
 // To run:
 //
