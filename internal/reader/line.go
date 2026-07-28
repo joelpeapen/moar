@@ -2,6 +2,7 @@ package reader
 
 import (
 	"sync/atomic"
+	"unsafe"
 
 	"github.com/walles/moor/v2/internal/linemetadata"
 	"github.com/walles/moor/v2/internal/search"
@@ -12,6 +13,16 @@ import (
 type Line struct {
 	raw            []byte
 	plainTextCache atomic.Pointer[string] // Use line.Plain() to access this field
+}
+
+// The raw bytes as a string. Not copied, so the result is a view of the line as
+// it looks right now; appending to the line does not extend it.
+//
+// Performance sensitive, see BenchmarkRenderHugeLine().
+func (line *Line) rawString() string {
+	// Safe because the first len(line.raw) bytes never change: raw only ever
+	// grows by appending, which writes past len(), never below it.
+	return unsafe.String(unsafe.SliceData(line.raw), len(line.raw))
 }
 
 // Returns a representation of the string split into styled tokens. Any regexp
@@ -37,7 +48,7 @@ func (line *Line) HighlightedTokens(
 		matchRanges = activeSearch.GetMatchRanges(plain)
 	}
 
-	fromString := textstyles.StyledRunesFromString(plainTextStyle, string(line.raw), &lineIndex, maxCellsCount)
+	fromString := textstyles.StyledRunesFromString(plainTextStyle, line.rawString(), &lineIndex, maxCellsCount)
 	returnRunes := make([]textstyles.CellWithMetadata, 0, len(fromString.StyledRunes))
 	lastWasSearchHit := false
 	for _, token := range fromString.StyledRunes {
@@ -65,7 +76,7 @@ func (line *Line) HighlightedTokens(
 }
 
 func (line *Line) HasManPageFormatting() bool {
-	return textstyles.HasManPageFormatting(string(line.raw))
+	return textstyles.HasManPageFormatting(line.rawString())
 }
 
 // The index is for error reporting. Set DisablePlainCachingForBenchmarking to
@@ -80,7 +91,7 @@ func (line *Line) Plain(index linemetadata.Index) string {
 		return *fromCache
 	}
 
-	plain := textstyles.StripFormatting(string(line.raw), index)
+	plain := textstyles.StripFormatting(line.rawString(), index)
 
 	// If this succeeds, all good. If it fails it means some other goroutine
 	// populated the cache before us, which is also fine.
