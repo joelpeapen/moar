@@ -17,14 +17,14 @@ type Line struct {
 // Returns a representation of the string split into styled tokens. Any regexp
 // matches are highlighted. A nil regexp means no highlighting.
 //
-// maxTokensCount: at most this many tokens will be included in the result. If
-// 0, do all runes. For BenchmarkRenderHugeLine() performance.
+// maxCellsCount: at most this many cells will be included in the result. If 0,
+// there is no limit. For BenchmarkRenderHugeLine() performance.
 func (line *Line) HighlightedTokens(
 	plainTextStyle twin.Style,
 	searchHitStyle twin.Style,
 	activeSearch search.Search,
 	lineIndex linemetadata.Index,
-	maxTokensCount int,
+	maxCellsCount int,
 ) textstyles.StyledRunesWithTrailer {
 	var matchRanges *search.MatchRanges
 	if activeSearch.Active() {
@@ -37,7 +37,7 @@ func (line *Line) HighlightedTokens(
 		matchRanges = activeSearch.GetMatchRanges(plain)
 	}
 
-	fromString := textstyles.StyledRunesFromString(plainTextStyle, string(line.raw), &lineIndex, maxTokensCount)
+	fromString := textstyles.StyledRunesFromString(plainTextStyle, string(line.raw), &lineIndex, maxCellsCount)
 	returnRunes := make([]textstyles.CellWithMetadata, 0, len(fromString.StyledRunes))
 	lastWasSearchHit := false
 	for _, token := range fromString.StyledRunes {

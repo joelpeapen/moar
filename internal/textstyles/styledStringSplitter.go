@@ -17,8 +17,8 @@ type styledStringSplitter struct {
 	lineIndex      *linemetadata.Index // Used for error reporting
 	plainTextStyle twin.Style
 
-	maxTokensCount     int
-	reportedRunesCount int
+	maxReportedRunesCount int
+	reportedRunesCount    int
 
 	nextByteIndex     int
 	previousByteIndex int
@@ -36,9 +36,14 @@ type styledStringSplitter struct {
 //
 // The lineIndex is only used for error reporting.
 //
-// maxTokensCount: at most this many tokens will be included in the result. If
-// 0, do all runes. For BenchmarkRenderHugeLine() performance.
-func styledStringsFromString(plainTextStyle twin.Style, s string, lineIndex *linemetadata.Index, maxTokensCount int, callback func(string, twin.Style)) twin.Style {
+// maxReportedRunesCount: stop parsing once this many input runes have been
+// reported to the callback. If 0, there is no limit. For
+// BenchmarkRenderHugeLine() performance.
+//
+// Note that input runes are not cells: man page backspace sequences take
+// several input runes per cell, and a TAB takes one input rune but renders as
+// several cells.
+func styledStringsFromString(plainTextStyle twin.Style, s string, lineIndex *linemetadata.Index, maxReportedRunesCount int, callback func(string, twin.Style)) twin.Style {
 	if !strings.ContainsAny(s, "\x1b") {
 		// This shortcut makes BenchmarkPlainTextSearch() perform a lot better
 		callback(s, plainTextStyle)
@@ -46,13 +51,13 @@ func styledStringsFromString(plainTextStyle twin.Style, s string, lineIndex *lin
 	}
 
 	splitter := styledStringSplitter{
-		input:           s,
-		lineIndex:       lineIndex,
-		plainTextStyle:  plainTextStyle, // How plain text should be styled
-		maxTokensCount:  maxTokensCount,
-		inProgressStyle: plainTextStyle, // Plain text style until something else comes along
-		callback:        callback,
-		trailer:         plainTextStyle, // Plain text style until something else comes along
+		input:                 s,
+		lineIndex:             lineIndex,
+		plainTextStyle:        plainTextStyle, // How plain text should be styled
+		maxReportedRunesCount: maxReportedRunesCount,
+		inProgressStyle:       plainTextStyle, // Plain text style until something else comes along
+		callback:              callback,
+		trailer:               plainTextStyle, // Plain text style until something else comes along
 	}
 	splitter.run()
 
@@ -477,7 +482,7 @@ func (s *styledStringSplitter) finalizeCurrentPart() {
 	s.callback(partString, s.inProgressStyle)
 	s.reportedRunesCount += utf8.RuneCountInString(partString)
 
-	if s.maxTokensCount > 0 && s.reportedRunesCount >= s.maxTokensCount {
+	if s.maxReportedRunesCount > 0 && s.reportedRunesCount >= s.maxReportedRunesCount {
 		// We've reported enough runes, stop processing any further input
 		s.nextByteIndex = len(s.input)
 	}

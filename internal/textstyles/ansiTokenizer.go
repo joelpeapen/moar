@@ -113,25 +113,25 @@ func StripFormatting(s string, lineIndex linemetadata.Index) string {
 // The prefix will be prepended to the string before parsing. The lineIndex is
 // used for error reporting.
 //
-// maxTokensCount: at most this many tokens will be included in the result. If
-// 0, do all runes. For BenchmarkRenderHugeLine() performance.
-func StyledRunesFromString(plainTextStyle twin.Style, s string, lineIndex *linemetadata.Index, maxTokensCount int) StyledRunesWithTrailer {
+// maxCellsCount: at most this many cells will be included in the result. If 0,
+// there is no limit. For BenchmarkRenderHugeLine() performance.
+func StyledRunesFromString(plainTextStyle twin.Style, s string, lineIndex *linemetadata.Index, maxCellsCount int) StyledRunesWithTrailer {
 	manPageHeading := manPageHeadingFromString(s)
 	if manPageHeading != nil {
 		return *manPageHeading
 	}
 
 	capacity := len(s)
-	if maxTokensCount > 0 && maxTokensCount < capacity {
-		capacity = maxTokensCount
+	if maxCellsCount > 0 && maxCellsCount < capacity {
+		capacity = maxCellsCount
 	}
 	cells := make([]CellWithMetadata, 0, capacity)
 
 	// Specs: https://en.wikipedia.org/wiki/ANSI_escape_code#3-bit_and_4-bit
 	styleUnprintable := twin.StyleDefault.WithBackground(twin.NewColor16(1)).WithForeground(twin.NewColor16(7))
 
-	trailer := styledStringsFromString(plainTextStyle, s, lineIndex, maxTokensCount, func(str string, style twin.Style) {
-		for _, token := range tokensFromStyledString(_StyledString{String: str, Style: style}, maxTokensCount) {
+	trailer := styledStringsFromString(plainTextStyle, s, lineIndex, maxCellsCount, func(str string, style twin.Style) {
+		for _, token := range tokensFromStyledString(_StyledString{String: str, Style: style}, maxCellsCount) {
 			switch token.Rune {
 
 			case '\x09': // TAB
@@ -378,23 +378,23 @@ func runesFromStyledString(styledString _StyledString) string {
 	return returnMe.String()
 }
 
-// maxTokensCount: at most this many tokens will be included in the result. If
-// 0, do all runes. For BenchmarkRenderHugeLine() performance.
-func tokensFromStyledString(styledString _StyledString, maxTokensCount int) []twin.StyledRune {
+// maxCellsCount: at most this many cells will be included in the result. If 0,
+// there is no limit. For BenchmarkRenderHugeLine() performance.
+func tokensFromStyledString(styledString _StyledString, maxCellsCount int) []twin.StyledRune {
 	maxBackspaceCheck := len(styledString.String)
-	if maxTokensCount > 0 && maxTokensCount < maxBackspaceCheck {
-		maxBackspaceCheck = maxTokensCount + 20 // Some extra to account for backspaces further out
+	if maxCellsCount > 0 && maxCellsCount < maxBackspaceCheck {
+		maxBackspaceCheck = maxCellsCount + 20 // Some extra to account for backspaces further out
 	}
 	if maxBackspaceCheck > len(styledString.String) {
 		maxBackspaceCheck = len(styledString.String)
 	}
 	if !strings.ContainsRune(styledString.String[:maxBackspaceCheck], BACKSPACE) {
 		// Shortcut when there's no backspace based formatting to worry about
-		returnTokensCount := len(styledString.String)
-		if maxTokensCount > 0 && returnTokensCount > maxTokensCount {
-			returnTokensCount = maxTokensCount
+		returnCellsCount := len(styledString.String)
+		if maxCellsCount > 0 && returnCellsCount > maxCellsCount {
+			returnCellsCount = maxCellsCount
 		}
-		tokens := make([]twin.StyledRune, 0, returnTokensCount)
+		tokens := make([]twin.StyledRune, 0, returnCellsCount)
 		for _, runeValue := range styledString.String {
 			if len(tokens) == cap(tokens) {
 				// We have enough runes, stop here
@@ -409,12 +409,12 @@ func tokensFromStyledString(styledString _StyledString, maxTokensCount int) []tw
 		return tokens
 	}
 
-	tokens := make([]twin.StyledRune, 0, maxTokensCount)
+	tokens := make([]twin.StyledRune, 0, maxCellsCount)
 
 	// Special handling for man page formatted lines. If this is updated you
 	// must update HasManPageFormatting() as well.
 	for runes := (lazyRunes{str: styledString.String}); runes.getRelative(0) != nil; runes.next() {
-		if maxTokensCount > 0 && len(tokens) >= maxTokensCount {
+		if maxCellsCount > 0 && len(tokens) >= maxCellsCount {
 			// We have enough runes, stop here
 			break
 		}
