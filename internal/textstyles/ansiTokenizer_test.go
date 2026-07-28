@@ -427,6 +427,42 @@ func TestTabExpansionRespectsCellsLimit(t *testing.T) {
 		"got %d cells, want fewer than %d", len(styled), requestedCellsCount+TabSize)
 }
 
+// Cutting a render short at the cells limit must not change the cells we do
+// deliver: a limited render is a prefix of an unlimited one, also when the
+// escape sequences sit beyond the bytes we scan for them.
+func TestCellsLimitOnlyTruncates(t *testing.T) {
+	// The prefixes below are one cell short of this, so they probe all but one
+	// percent of the byte budget. Enough that a maxBytesPerCell one single byte
+	// too small still fails this test.
+	const requestedCellsCount = 100
+
+	// Each prefix renders as requestedCellsCount-1 cells, so the escape sequence
+	// right after it still lands inside the requested range
+	prefixes := map[string]string{
+		"plain": strings.Repeat("x", requestedCellsCount-1),
+
+		// The densest cell there is, eleven bytes: see maxBytesPerCell
+		"bold underline": strings.Repeat("_\b\U0001D54F\b\U0001D54F", requestedCellsCount-1),
+	}
+
+	for name, prefix := range prefixes {
+		t.Run(name, func(t *testing.T) {
+			// Something red after the prefix, then twice the escape sequence scan
+			// window worth of text, so that the scan really does get cut short
+			line := prefix + "\x1b[31m" + strings.Repeat("y", 2*requestedCellsCount*maxBytesPerCell)
+
+			unlimited := StyledRunesFromString(twin.StyleDefault, line, nil, 0).StyledRunes
+			limited := StyledRunesFromString(twin.StyleDefault, line, nil, requestedCellsCount).StyledRunes
+
+			assert.Equal(t, len(limited), requestedCellsCount)
+			assert.DeepEqual(t,
+				limited,
+				unlimited[:requestedCellsCount],
+				cmp.AllowUnexported(twin.Style{}))
+		})
+	}
+}
+
 // Benchmark stripping formatting from a colored git diff sample.
 // To run:
 //
