@@ -143,6 +143,12 @@ func StyledRunesFromString(plainTextStyle twin.Style, s string, lineIndex *linem
 		}
 
 		for _, token := range tokensFromStyledString(_StyledString{String: str, Style: style}, remainingCellsCount) {
+			if maxCellsCount > 0 && len(cells) >= maxCellsCount {
+				// Enough cells. We check here rather than trusting the token
+				// count, because one token can render as several cells.
+				break
+			}
+
 			switch token.Rune {
 
 			case '\x09': // TAB

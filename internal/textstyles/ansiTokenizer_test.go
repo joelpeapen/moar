@@ -409,6 +409,24 @@ func TestManPageFormattingDeliversRequestedCellsCount(t *testing.T) {
 	}
 }
 
+// A TAB is one input rune rendering as up to TabSize cells, so tab expansion
+// must stop once the cells limit is reached. The final TAB is rendered up to its
+// tab stop rather than cut in half, so the result can overshoot by up to
+// TabSize-1 cells. What it must not do is scale with the length of the line.
+func TestTabExpansionRespectsCellsLimit(t *testing.T) {
+	const requestedCellsCount = 10
+
+	// Far more tabs than the limit leaves room for
+	line := strings.Repeat("\t", 500)
+
+	styled := StyledRunesFromString(twin.StyleDefault, line, nil, requestedCellsCount).StyledRunes
+
+	assert.Assert(t, len(styled) >= requestedCellsCount,
+		"got %d cells, want at least the %d requested", len(styled), requestedCellsCount)
+	assert.Assert(t, len(styled) < requestedCellsCount+TabSize,
+		"got %d cells, want fewer than %d", len(styled), requestedCellsCount+TabSize)
+}
+
 // Benchmark stripping formatting from a colored git diff sample.
 // To run:
 //
