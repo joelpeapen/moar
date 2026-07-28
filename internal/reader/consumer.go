@@ -102,15 +102,11 @@ func (reader *ReaderImpl) assumeLockAndAddLine(line []byte, considerAppending bo
 		return pauseDuration
 	}
 
-	// Special case, append to the previous line
+	// Special case, append to the previous line. Performance sensitive,
+	// validate changes with BenchmarkReadLongLine().
+	// Ref: https://github.com/walles/moor/issues/358
 	baseLine := reader.lines[len(reader.lines)-1]
-
-	// Build the complete line
-	completeLine := make([]byte, len(baseLine.raw)+len(line))
-	copy(completeLine, baseLine.raw)
-	copy(completeLine[len(baseLine.raw):], line)
-
-	baseLine.raw = completeLine
+	baseLine.raw = append(baseLine.raw, line...)
 	baseLine.plainTextCache.Store(nil) // Invalidate cache
 
 	return 0
