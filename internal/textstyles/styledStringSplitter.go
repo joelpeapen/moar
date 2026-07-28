@@ -12,6 +12,17 @@ import (
 
 const esc = '\x1b'
 
+// Safe upper bound on how many input bytes can go into one screen cell. On a
+// man page, when there are no escape sequences involved: at most seven runes
+// per cell (the man page bullet '+', backspace, '+', backspace, 'o', backspace,
+// 'o'), at most utf8.UTFMax bytes per rune.
+//
+// Loose on purpose, since those two maxima cannot co-occur: bullets are ASCII.
+// The densest cell really is a bold underlined four byte rune ('_', backspace,
+// 𝕏, backspace, 𝕏) at eleven bytes. Erring high only costs a few scanned
+// bytes, erring low renders the wrong thing.
+const maxBytesPerCell = 7 * utf8.UTFMax
+
 type styledStringSplitter struct {
 	input          string
 	lineIndex      *linemetadata.Index // Used for error reporting
@@ -44,8 +55,21 @@ type styledStringSplitter struct {
 //
 // maxCellsCount: stop parsing once the callback reports this many cells. If 0,
 // there is no limit. For BenchmarkRenderHugeLine() performance.
+//
+// With a limit set, the returned trailer is only accurate if fewer than
+// maxCellsCount cells were reported. A full result fills the row, so there is
+// nothing left for the trailer to paint.
 func styledStringsFromString(plainTextStyle twin.Style, s string, lineIndex *linemetadata.Index, maxCellsCount int, callback func(string, twin.Style) int) twin.Style {
-	if !strings.ContainsAny(s, "\x1b") {
+	// Escape sequences past this window cannot affect any cell we report, see
+	// maxBytesPerCell. Performance sensitive, see BenchmarkRenderHugeLine() and
+	// TestCellsLimitOnlyTruncates().
+	escapeScanWindow := s
+	windowSize := maxCellsCount * maxBytesPerCell
+	if maxCellsCount > 0 && windowSize < len(s) {
+		escapeScanWindow = s[:windowSize]
+	}
+
+	if !strings.ContainsRune(escapeScanWindow, esc) {
 		// This shortcut makes BenchmarkPlainTextSearch() perform a lot better
 		callback(s, plainTextStyle)
 		return plainTextStyle

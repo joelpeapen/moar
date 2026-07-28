@@ -34,8 +34,14 @@ var TabSize = 8
 const BACKSPACE = '\b'
 
 type StyledRunesWithTrailer struct {
-	StyledRunes       []CellWithMetadata
-	Trailer           twin.Style
+	StyledRunes []CellWithMetadata
+
+	// Style for padding the rest of the screen row, once StyledRunes run out. A
+	// "clear to end of line" escape sequence in the input sets this, so that the
+	// cleared part of the row gets the style that was in effect. twin.StyleDefault
+	// means no padding is needed.
+	Trailer twin.Style
+
 	ContainsSearchHit bool
 }
 
@@ -117,6 +123,10 @@ func StripFormatting(s string, lineIndex linemetadata.Index) string {
 //
 // maxCellsCount: at most this many cells will be included in the result. If 0,
 // there is no limit. For BenchmarkRenderHugeLine() performance.
+//
+// With a limit set, the returned Trailer is only accurate if fewer than
+// maxCellsCount cells came back. A full result fills the row, so there is
+// nothing left for the trailer to paint.
 func StyledRunesFromString(plainTextStyle twin.Style, s string, lineIndex *linemetadata.Index, maxCellsCount int) StyledRunesWithTrailer {
 	manPageHeading := manPageHeadingFromString(s)
 	if manPageHeading != nil {
