@@ -463,6 +463,35 @@ func TestCellsLimitOnlyTruncates(t *testing.T) {
 	}
 }
 
+// Man pages are pre-formatted to the terminal width, so their overstrike
+// formatting always sits near the start of a line. Detection only scans that
+// far, which keeps it cheap on lines that are not man page formatting at all.
+//
+// Measured over 14801 man pages from /usr/share/man and Homebrew, at MANWIDTH
+// 80 and 400: the first overstrike is at most 203 bytes into its line, and at
+// most 654 bytes into the page.
+func TestHasManPageFormattingOnlyScansLineStart(t *testing.T) {
+	// Comfortably past any scan window, so this fails for an unlimited scan.
+	const farAway = 1024 * 1024
+
+	overstrike := "b\x08bo\x08ol\x08ld\x08d"
+
+	t.Run("near the start is detected", func(t *testing.T) {
+		// 654 bytes is the deepest any surveyed man page needed
+		line := strings.Repeat("x", 654) + overstrike
+		assert.Assert(t, HasManPageFormatting(line))
+	})
+
+	t.Run("far into the line is not detected", func(t *testing.T) {
+		line := strings.Repeat("x", farAway) + overstrike
+		assert.Assert(t, !HasManPageFormatting(line))
+	})
+
+	t.Run("unformatted long line is not detected", func(t *testing.T) {
+		assert.Assert(t, !HasManPageFormatting(strings.Repeat("x", farAway)))
+	})
+}
+
 // Benchmark stripping formatting from a colored git diff sample.
 // To run:
 //

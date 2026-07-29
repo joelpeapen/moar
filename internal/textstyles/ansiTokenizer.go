@@ -481,8 +481,29 @@ func tokensFromStyledString(styledString _StyledString, maxCellsCount int) []twi
 	return tokens
 }
 
+// How far into a line we look for man page formatting. Man pages are
+// pre-formatted to a fixed width, so their overstrike sits near the start of a
+// line: across 14801 man pages from /usr/share/man and Homebrew the deepest was
+// 44 bytes in at MANWIDTH 80, and 203 bytes at MANWIDTH 400.
+//
+// That is about half a byte per column, so this budget covers pages formatted
+// for a 4000 column terminal. A constant rather than our own terminal width,
+// because what matters is the width the page was formatted for, and that can be
+// wider than the terminal we are showing it in.
+const manPageFormattingScanBytes = 2 * 1024
+
 // Like tokensFromStyledString(), but only checks without building any formatting
+//
+// Only the first manPageFormattingScanBytes bytes are examined, so formatting
+// further in goes unnoticed. Performance sensitive, see BenchmarkDetectManPage()
+// and TestHasManPageFormattingOnlyScansLineStart().
 func HasManPageFormatting(s string) bool {
+	if len(s) > manPageFormattingScanBytes {
+		// Cutting mid-rune is fine, the partial rune decodes into
+		// utf8.RuneError which matches none of the formatting we look for.
+		s = s[:manPageFormattingScanBytes]
+	}
+
 	for runes := (lazyRunes{str: s}); runes.getRelative(0) != nil; runes.next() {
 		consumed := consumeBullet(&runes)
 		if consumed != nil {
