@@ -31,3 +31,12 @@ Always run `./test.sh` locally before making any PRs.
 Release messages go into annotated tags. Please look at the ten most recent
 annotated tags for style guidance. The basis for all those messages are user
 visible changes since last release.
+
+# Race Conditions
+
+`./moor.sh` and `./test.sh` enable the race detector, and any race it detects
+lands in a `moor-race-report.*` file in the repo root.
+
+If you see one of those files, work through RACES.md before finishing whatever
+else you are doing. Race fixes are exempt from the "reproduce with a failing
+test" rule above, RACES.md says what to do instead.

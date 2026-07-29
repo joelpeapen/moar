@@ -265,6 +265,9 @@ Launch the manual test suite:
 To run tests in 32 bit mode, either do `GOARCH=386 ./test.sh` if you're on
 Linux, or `docker build . -f Dockerfile-test-386` (tested on macOS).
 
+Both `./test.sh` and `./moor.sh` enable the race detector. Detected races end up
+in `moor-race-report.*` files in the repo root, see [RACES.md](RACES.md).
+
 Run microbenchmarks:
 
 ```bash
