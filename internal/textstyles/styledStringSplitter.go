@@ -152,6 +152,14 @@ func (s *styledStringSplitter) run() {
 
 func (s *styledStringSplitter) handleRune(char rune) {
 	s.inProgressString.WriteRune(char)
+
+	// A long run with no style changes would otherwise stay buffered until the
+	// end of the line. Once we have enough input bytes to fill the requested
+	// cells even in the densest supported format, let the callback stop us.
+	if s.maxCellsCount > 0 && s.inProgressString.Len() >= s.maxCellsCount*maxBytesPerCell {
+		s.finalizeCurrentPart()
+		s.inProgressString.Reset()
+	}
 }
 
 func (s *styledStringSplitter) handleEscape() error {

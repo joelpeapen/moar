@@ -161,6 +161,36 @@ func TestPlainTextColor(t *testing.T) {
 	assert.Equal(t, plainTextStyle, trailer)
 }
 
+// A cells limit should bound how much of a styled run we buffer before asking
+// the callback whether it has rendered enough. Without this, a leading color
+// escape makes us buffer the entire line before the limit can stop parsing.
+func TestCellsLimitFlushesLongStyledRun(t *testing.T) {
+	const requestedCellsCount = 80
+	line := "\x1b[31m" + strings.Repeat("x", 5*1024*1024)
+
+	callbackCalls := 0
+	styledStringsFromString(twin.StyleDefault, line, nil, requestedCellsCount, func(str string, _ twin.Style) int {
+		callbackCalls++
+		assert.Assert(t, len(str) <= requestedCellsCount*maxBytesPerCell,
+			"callback got %d bytes, expected at most %d", len(str), requestedCellsCount*maxBytesPerCell)
+
+		// All input runes in str are single-cell x characters, so the callback
+		// has rendered the requested number of cells.
+		return requestedCellsCount
+	})
+
+	assert.Equal(t, callbackCalls, 1)
+}
+
+func BenchmarkStyledRunesFromHugeAnsiLine(b *testing.B) {
+	line := "\x1b[31m" + strings.Repeat("x", 5*1024*1024)
+	b.SetBytes(int64(len(line)))
+
+	for b.Loop() {
+		StyledRunesFromString(twin.StyleDefault, line, nil, 81)
+	}
+}
+
 // Ignore G0 charset resets (`ESC(B`). They are output by "tput sgr0" on at
 // least TERM=xterm-256color.
 //
