@@ -171,8 +171,7 @@ func TestCellsLimitFlushesLongStyledRun(t *testing.T) {
 	callbackCalls := 0
 	styledStringsFromString(twin.StyleDefault, line, nil, requestedCellsCount, func(str string, _ twin.Style) int {
 		callbackCalls++
-		assert.Assert(t, len(str) <= requestedCellsCount*maxBytesPerCell,
-			"callback got %d bytes, expected at most %d", len(str), requestedCellsCount*maxBytesPerCell)
+		assert.Equal(t, len(str), requestedCellsCount*maxBytesPerCell)
 
 		// All input runes in str are single-cell x characters, so the callback
 		// has rendered the requested number of cells.
