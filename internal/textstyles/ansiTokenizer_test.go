@@ -526,8 +526,8 @@ func BenchmarkStripFormatting(b *testing.B) {
 	lines := strings.Split(string(data), "\n")
 	// Set processed bytes per iteration
 	b.SetBytes(int64(len(data)))
-	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
+
+	for b.Loop() {
 		for _, line := range lines {
 			// We ignore the output; benchmarking execution time only
 			_ = StripFormatting(line, linemetadata.Index{})
@@ -557,8 +557,8 @@ func BenchmarkStripFormattingUnformattedInput(b *testing.B) {
 	lines := strings.Split(unformatted.String(), "\n")
 	// Set processed bytes per iteration
 	b.SetBytes(int64(len(unformatted.String())))
-	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
+
+	for b.Loop() {
 		for _, line := range lines {
 			// We ignore the output; benchmarking execution time only
 			_ = StripFormatting(line, linemetadata.Index{})
