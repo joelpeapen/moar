@@ -34,6 +34,10 @@ type styledStringSplitter struct {
 	// callback a chance to stop us. 0 means never.
 	flushAtBytes int
 
+	// Set once the callback has reported all the cells we were asked for. No
+	// remaining input can affect the result, so we stop looking at it.
+	done bool
+
 	nextByteIndex     int
 	previousByteIndex int
 
@@ -123,7 +127,7 @@ func (s *styledStringSplitter) lastChar() rune {
 func (s *styledStringSplitter) run() {
 	char := s.nextChar()
 	for {
-		if char == -1 {
+		if char == -1 || s.done {
 			s.finalizeCurrentPart()
 			return
 		}
@@ -145,6 +149,9 @@ func (s *styledStringSplitter) run() {
 				// character as just plain runes.
 				for _, char := range s.input[escIndex:s.previousByteIndex] {
 					s.handleRune(char)
+					if s.done {
+						break
+					}
 				}
 
 				// Start over with the character that caused the problem
@@ -512,7 +519,8 @@ func (s *styledStringSplitter) startNewPart(style twin.Style) {
 	s.inProgressStyle = style
 }
 
-// Report whatever we have buffered to the callback, and empty the buffer.
+// Report whatever we have buffered to the callback, and empty the buffer. Sets
+// done if the callback has now rendered all the cells we were asked for.
 //
 // Resetting rather than truncating matters: the string we hand the callback
 // shares the builder's buffer, and Reset() replaces that buffer instead of
@@ -527,7 +535,6 @@ func (s *styledStringSplitter) finalizeCurrentPart() {
 	s.inProgressString.Reset()
 
 	if s.maxCellsCount > 0 && totalCellsCount >= s.maxCellsCount {
-		// We've reported enough cells, stop processing any further input
-		s.nextByteIndex = len(s.input)
+		s.done = true
 	}
 }
