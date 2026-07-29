@@ -102,12 +102,19 @@ func (reader *ReaderImpl) assumeLockAndAddLine(line []byte, considerAppending bo
 		return pauseDuration
 	}
 
-	// Special case, append to the previous line. Performance sensitive,
-	// validate changes with BenchmarkReadLongLine().
+	// Special case, extend the previous line. Performance sensitive, validate
+	// changes with BenchmarkReadLongLine().
 	// Ref: https://github.com/walles/moor/issues/358
-	baseLine := reader.lines[len(reader.lines)-1]
-	baseLine.raw = append(baseLine.raw, line...)
-	baseLine.plainTextCache.Store(nil) // Invalidate cache
+	lastIndex := len(reader.lines) - 1
+	baseLine := reader.lines[lastIndex]
+
+	// Publish a longer replacement rather than growing baseLine in place.
+	// Renderers keep using *Line values after dropping our lock, so a published
+	// Line's raw field must never be written again. See Line.rawString().
+	//
+	// Not from linePool: pooled Lines share one backing array, so a superseded
+	// pool entry would keep its (now stale) raw bytes from being collected.
+	reader.lines[lastIndex] = &Line{raw: append(baseLine.raw, line...)}
 
 	return 0
 }

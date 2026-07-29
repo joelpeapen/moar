@@ -15,13 +15,13 @@ type Line struct {
 	plainTextCache atomic.Pointer[string] // Use line.Plain() to access this field
 }
 
-// The raw bytes as a string. Not copied, so the result is a view of the line as
-// it looks right now; appending to the line does not extend it.
+// The raw bytes as a string. Not copied, so the result aliases the line's
+// backing array rather than snapshotting it.
 //
 // Performance sensitive, see BenchmarkRenderHugeLine().
 func (line *Line) rawString() string {
-	// Safe because the first len(line.raw) bytes never change: raw only ever
-	// grows by appending, which writes past len(), never below it.
+	// Safe because raw is never written once the Line has been published to
+	// readers. A line that grows is replaced by a longer Line.
 	return unsafe.String(unsafe.SliceData(line.raw), len(line.raw))
 }
 
