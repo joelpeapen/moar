@@ -565,3 +565,17 @@ func BenchmarkStripFormattingUnformattedInput(b *testing.B) {
 		}
 	}
 }
+
+// A huge line starting with an escape sequence. Lines with no escape sequences
+// have a shortcut in styledStringsFromString(); this benchmark measures what
+// happens when we can't take it.
+func BenchmarkStyledRunesFromHugeAnsiLine(b *testing.B) {
+	line := "\x1b[31m" + strings.Repeat("x", 5*1024*1024)
+	b.SetBytes(int64(len(line)))
+
+	for b.Loop() {
+		// 81 is what an 80 column terminal asks for, see HighlightedTokens()
+		// callers
+		StyledRunesFromString(twin.StyleDefault, line, nil, 81)
+	}
+}

@@ -181,15 +181,6 @@ func TestCellsLimitFlushesLongStyledRun(t *testing.T) {
 	assert.Equal(t, callbackCalls, 1)
 }
 
-func BenchmarkStyledRunesFromHugeAnsiLine(b *testing.B) {
-	line := "\x1b[31m" + strings.Repeat("x", 5*1024*1024)
-	b.SetBytes(int64(len(line)))
-
-	for b.Loop() {
-		StyledRunesFromString(twin.StyleDefault, line, nil, 81)
-	}
-}
-
 // Ignore G0 charset resets (`ESC(B`). They are output by "tput sgr0" on at
 // least TERM=xterm-256color.
 //
