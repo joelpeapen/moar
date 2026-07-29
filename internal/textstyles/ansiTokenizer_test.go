@@ -463,6 +463,26 @@ func TestCellsLimitOnlyTruncates(t *testing.T) {
 	}
 }
 
+// Escape sequences cost input bytes but render no cells, so a line can carry
+// arbitrarily many of them before its first visible cell. The cells limit must
+// still deliver the cells that are there.
+func TestCellsLimitCountsCellsNotEscapeBytes(t *testing.T) {
+	const requestedCellsCount = 4
+
+	// Red on, red off, over and over. Renders nothing, while taking up many times
+	// the requested cells' worth of input bytes.
+	noopEscapes := strings.Repeat("\x1b[31m\x1b[m", requestedCellsCount*maxBytesPerCell)
+	line := noopEscapes + "\x1b[1m" + strings.Repeat("x", requestedCellsCount)
+
+	styled := StyledRunesFromString(twin.StyleDefault, line, nil, requestedCellsCount).StyledRunes
+
+	assert.Equal(t, len(styled), requestedCellsCount)
+	for _, cell := range styled {
+		assert.Equal(t, cell.Rune, 'x')
+		assert.Equal(t, cell.Style, twin.StyleDefault.WithAttr(twin.AttrBold))
+	}
+}
+
 // Man pages are pre-formatted to the terminal width, so their overstrike
 // formatting always sits near the start of a line. Detection only scans that
 // far, which keeps it cheap on lines that are not man page formatting at all.
@@ -506,8 +526,8 @@ func BenchmarkStripFormatting(b *testing.B) {
 	lines := strings.Split(string(data), "\n")
 	// Set processed bytes per iteration
 	b.SetBytes(int64(len(data)))
-	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
+
+	for b.Loop() {
 		for _, line := range lines {
 			// We ignore the output; benchmarking execution time only
 			_ = StripFormatting(line, linemetadata.Index{})
@@ -537,11 +557,25 @@ func BenchmarkStripFormattingUnformattedInput(b *testing.B) {
 	lines := strings.Split(unformatted.String(), "\n")
 	// Set processed bytes per iteration
 	b.SetBytes(int64(len(unformatted.String())))
-	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
+
+	for b.Loop() {
 		for _, line := range lines {
 			// We ignore the output; benchmarking execution time only
 			_ = StripFormatting(line, linemetadata.Index{})
 		}
+	}
+}
+
+// A huge line starting with an escape sequence. Lines with no escape sequences
+// have a shortcut in styledStringsFromString(); this benchmark measures what
+// happens when we can't take it.
+func BenchmarkStyledRunesFromHugeAnsiLine(b *testing.B) {
+	line := "\x1b[31m" + strings.Repeat("x", 5*1024*1024)
+	b.SetBytes(int64(len(line)))
+
+	for b.Loop() {
+		// 81 is what an 80 column terminal asks for, see HighlightedTokens()
+		// callers
+		StyledRunesFromString(twin.StyleDefault, line, nil, 81)
 	}
 }

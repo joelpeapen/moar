@@ -161,6 +161,52 @@ func TestPlainTextColor(t *testing.T) {
 	assert.Equal(t, plainTextStyle, trailer)
 }
 
+// A cells limit should bound how much of a styled run we buffer before asking
+// the callback whether it has rendered enough. Without this, a leading color
+// escape makes us buffer the entire line before the limit can stop parsing.
+func TestCellsLimitFlushesLongStyledRun(t *testing.T) {
+	const requestedCellsCount = 80
+	line := "\x1b[31m" + strings.Repeat("x", 5*1024*1024)
+
+	callbackCalls := 0
+	styledStringsFromString(twin.StyleDefault, line, nil, requestedCellsCount, func(str string, _ twin.Style) int {
+		callbackCalls++
+		assert.Equal(t, len(str), requestedCellsCount*maxBytesPerCell)
+
+		// All input runes in str are single-cell x characters, so the callback
+		// has rendered the requested number of cells.
+		return requestedCellsCount
+	})
+
+	assert.Equal(t, callbackCalls, 1)
+}
+
+// An escape sequence we can't make sense of gets replayed as plain runes. The
+// cells limit should stop that replay as soon as the callback is full, just like
+// it stops ordinary parsing.
+func TestCellsLimitStopsMalformedEscapeReplay(t *testing.T) {
+	const requestedCellsCount = 80
+
+	// "ESC[" followed by parameter bytes and then "z", which is not a CSI type we
+	// handle. Rendering it means replaying all those parameter bytes.
+	line := "\x1b[" + strings.Repeat("3", 5*1024*1024) + "z"
+
+	callbackCalls := 0
+	styledStringsFromString(twin.StyleDefault, line, nil, requestedCellsCount, func(str string, _ twin.Style) int {
+		callbackCalls++
+
+		// The replay starts over from the ESC, so anything we get should come
+		// from the start of the line
+		assert.Assert(t, strings.HasPrefix(line, str),
+			"got %d bytes from somewhere other than the start of the line", len(str))
+
+		// Report the limit as reached, so there is no reason to keep going
+		return requestedCellsCount
+	})
+
+	assert.Equal(t, callbackCalls, 1)
+}
+
 // Ignore G0 charset resets (`ESC(B`). They are output by "tput sgr0" on at
 // least TERM=xterm-256color.
 //
