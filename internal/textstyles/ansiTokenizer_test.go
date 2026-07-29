@@ -463,6 +463,26 @@ func TestCellsLimitOnlyTruncates(t *testing.T) {
 	}
 }
 
+// Escape sequences cost input bytes but render no cells, so a line can carry
+// arbitrarily many of them before its first visible cell. The cells limit must
+// still deliver the cells that are there.
+func TestCellsLimitCountsCellsNotEscapeBytes(t *testing.T) {
+	const requestedCellsCount = 4
+
+	// Red on, red off, over and over. Renders nothing, while taking up many times
+	// the requested cells' worth of input bytes.
+	noopEscapes := strings.Repeat("\x1b[31m\x1b[m", requestedCellsCount*maxBytesPerCell)
+	line := noopEscapes + "\x1b[1m" + strings.Repeat("x", requestedCellsCount)
+
+	styled := StyledRunesFromString(twin.StyleDefault, line, nil, requestedCellsCount).StyledRunes
+
+	assert.Equal(t, len(styled), requestedCellsCount)
+	for _, cell := range styled {
+		assert.Equal(t, cell.Rune, 'x')
+		assert.Equal(t, cell.Style, twin.StyleDefault.WithAttr(twin.AttrBold))
+	}
+}
+
 // Man pages are pre-formatted to the terminal width, so their overstrike
 // formatting always sits near the start of a line. Detection only scans that
 // far, which keeps it cheap on lines that are not man page formatting at all.
