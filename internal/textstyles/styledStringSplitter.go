@@ -158,7 +158,6 @@ func (s *styledStringSplitter) handleRune(char rune) {
 	// cells even in the densest supported format, let the callback stop us.
 	if s.maxCellsCount > 0 && s.inProgressString.Len() >= s.maxCellsCount*maxBytesPerCell {
 		s.finalizeCurrentPart()
-		s.inProgressString.Reset()
 	}
 }
 
@@ -501,10 +500,14 @@ func (s *styledStringSplitter) startNewPart(style twin.Style) {
 	}
 
 	s.finalizeCurrentPart()
-	s.inProgressString.Reset()
 	s.inProgressStyle = style
 }
 
+// Report whatever we have buffered to the callback, and empty the buffer.
+//
+// Resetting rather than truncating matters: the string we hand the callback
+// shares the builder's buffer, and Reset() replaces that buffer instead of
+// writing over it.
 func (s *styledStringSplitter) finalizeCurrentPart() {
 	if s.inProgressString.Len() == 0 {
 		// Nothing to do
@@ -512,6 +515,7 @@ func (s *styledStringSplitter) finalizeCurrentPart() {
 	}
 
 	totalCellsCount := s.callback(s.inProgressString.String(), s.inProgressStyle)
+	s.inProgressString.Reset()
 
 	if s.maxCellsCount > 0 && totalCellsCount >= s.maxCellsCount {
 		// We've reported enough cells, stop processing any further input
