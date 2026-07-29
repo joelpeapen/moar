@@ -30,6 +30,10 @@ type styledStringSplitter struct {
 
 	maxCellsCount int
 
+	// Report the current part once it has buffered this many bytes, giving the
+	// callback a chance to stop us. 0 means never.
+	flushAtBytes int
+
 	nextByteIndex     int
 	previousByteIndex int
 
@@ -60,13 +64,17 @@ type styledStringSplitter struct {
 // maxCellsCount cells were reported. A full result fills the row, so there is
 // nothing left for the trailer to paint.
 func styledStringsFromString(plainTextStyle twin.Style, s string, lineIndex *linemetadata.Index, maxCellsCount int, callback func(string, twin.Style) int) twin.Style {
-	// Escape sequences past this window cannot affect any cell we report, see
-	// maxBytesPerCell. Performance sensitive, see BenchmarkRenderHugeLine() and
+	// The cells we report can only come from this many leading input bytes, see
+	// maxBytesPerCell. So nothing past here can affect our result, neither an
+	// escape sequence nor more text. 0 means no limit was requested.
+	//
+	// Performance sensitive, see BenchmarkRenderHugeLine() and
 	// TestCellsLimitOnlyTruncates().
+	relevantBytesCount := maxCellsCount * maxBytesPerCell
+
 	escapeScanWindow := s
-	windowSize := maxCellsCount * maxBytesPerCell
-	if maxCellsCount > 0 && windowSize < len(s) {
-		escapeScanWindow = s[:windowSize]
+	if relevantBytesCount > 0 && relevantBytesCount < len(s) {
+		escapeScanWindow = s[:relevantBytesCount]
 	}
 
 	if !strings.ContainsRune(escapeScanWindow, esc) {
@@ -80,6 +88,7 @@ func styledStringsFromString(plainTextStyle twin.Style, s string, lineIndex *lin
 		lineIndex:       lineIndex,
 		plainTextStyle:  plainTextStyle, // How plain text should be styled
 		maxCellsCount:   maxCellsCount,
+		flushAtBytes:    relevantBytesCount,
 		inProgressStyle: plainTextStyle, // Plain text style until something else comes along
 		callback:        callback,
 		trailer:         plainTextStyle, // Plain text style until something else comes along
@@ -154,9 +163,9 @@ func (s *styledStringSplitter) handleRune(char rune) {
 	s.inProgressString.WriteRune(char)
 
 	// A long run with no style changes would otherwise stay buffered until the
-	// end of the line. Once we have enough input bytes to fill the requested
-	// cells even in the densest supported format, let the callback stop us.
-	if s.maxCellsCount > 0 && s.inProgressString.Len() >= s.maxCellsCount*maxBytesPerCell {
+	// end of the line. Once we have buffered every byte that could contribute to
+	// the requested cells, let the callback stop us.
+	if s.flushAtBytes > 0 && s.inProgressString.Len() >= s.flushAtBytes {
 		s.finalizeCurrentPart()
 	}
 }
