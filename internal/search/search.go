@@ -110,26 +110,49 @@ func (search Search) Matches(line string) bool {
 	return search.pattern.MatchString(line)
 }
 
-// getMatchRanges locates one or more regexp matches in a string
-func (search Search) GetMatchRanges(String string) *MatchRanges {
+// GetMatchRanges locates matches in a string. The returned indices are rune
+// indices into String.
+//
+// maxRuneCount: matches covering only runes beyond this index may be left out.
+// 0 means no limit. For BenchmarkRenderHugeLine() performance.
+//
+// Regexp searches ignore maxRuneCount, so they always cost the full length of
+// String.
+func (search Search) GetMatchRanges(String string, maxRuneCount int) *MatchRanges {
 	if search.Inactive() {
 		return nil
 	}
 
-	if !search.hasUppercase {
-		// Case insensitive search, lowercase the string. The pattern is already
-		// lowercase whenever hasUppercase is false.
-		String = strings.ToLower(String)
-	}
-
 	regexpSearch := !search.isSubstringSearch
 	if regexpSearch {
+		if !search.hasUppercase {
+			// Case insensitive search, lowercase the string. The pattern is
+			// already lowercase whenever hasUppercase is false.
+			String = strings.ToLower(String)
+		}
+
 		return &MatchRanges{
 			Matches: toRunePositions(search.pattern.FindAllStringIndex(String, -1), String),
 		}
 	}
 
 	// Faster code for non-regexp search follows
+
+	if maxRuneCount > 0 {
+		// A match covering rune maxRuneCount-1 can start no earlier than that
+		// and is no longer than findMe, so this keeps every match we care about
+		// whole. Truncating here also bounds the ToLower() copy below.
+		String = runePrefix(String, maxRuneCount+utf8.RuneCountInString(search.findMe))
+	}
+
+	if !search.hasUppercase {
+		// Case insensitive search, lowercase the string. The pattern is already
+		// lowercase whenever hasUppercase is false.
+		//
+		// strings.ToLower() maps each rune to exactly one rune, so this leaves
+		// the rune indices computed below unchanged.
+		String = strings.ToLower(String)
+	}
 
 	offset := 0
 	currentByteIndex := 0
@@ -162,6 +185,20 @@ func (search Search) GetMatchRanges(String string) *MatchRanges {
 	return &MatchRanges{
 		Matches: matches,
 	}
+}
+
+// The first maxRunes runes of s, or all of s if it is shorter than that.
+func runePrefix(s string, maxRunes int) string {
+	runeCount := 0
+	for byteIndex := range s {
+		if runeCount == maxRunes {
+			return s[:byteIndex]
+		}
+
+		runeCount++
+	}
+
+	return s
 }
 
 // Convert byte indices to rune indices

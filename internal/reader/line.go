@@ -38,6 +38,7 @@ func (line *Line) HighlightedTokens(
 	maxCellsCount int,
 ) textstyles.StyledRunesWithTrailer {
 	var matchRanges *search.MatchRanges
+	containsSearchHit := false
 	if activeSearch.Active() {
 		// Only look for matches if there is an active search, since if a line
 		// is 250M characters long, line.Plain() can be slow.
@@ -45,7 +46,11 @@ func (line *Line) HighlightedTokens(
 		// This makes the UI responsive when showing a huge line.
 		plain := line.Plain(lineIndex)
 
-		matchRanges = activeSearch.GetMatchRanges(plain)
+		matchRanges = activeSearch.GetMatchRanges(plain, maxCellsCount)
+
+		// matchRanges covers only the cells we return, but callers use
+		// ContainsSearchHit to mark hits anywhere in the line.
+		containsSearchHit = !matchRanges.Empty() || activeSearch.Matches(plain)
 	}
 
 	fromString := textstyles.StyledRunesFromString(plainTextStyle, line.rawString(), &lineIndex, maxCellsCount)
@@ -71,7 +76,7 @@ func (line *Line) HighlightedTokens(
 	return textstyles.StyledRunesWithTrailer{
 		StyledRunes:       returnRunes,
 		Trailer:           fromString.Trailer,
-		ContainsSearchHit: !matchRanges.Empty(),
+		ContainsSearchHit: containsSearchHit,
 	}
 }
 
