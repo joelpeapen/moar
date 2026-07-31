@@ -63,14 +63,51 @@ func TestFormatJsonArray(t *testing.T) {
 // Highlighting that gives every visible character the same styling conveys
 // nothing, so Highlight() declines to do it.
 func TestHighlightUniformIsNoop(t *testing.T) {
-	for _, text := range []string{
-		"1\n",
-		" 1 \n",
-		"\t1\n",
-		`"text"` + "\n",
+	for _, testCase := range []struct {
+		lexer string
+		text  string
+	}{
+		{"json", "1\n"},
+		{"json", " 1 \n"},
+		{"json", "\t1\n"},
+		{"json", `"text"` + "\n"},
+
+		// One heading and nothing else, so the whole thing is bold white
+		{"markdown", "# Pro Tip\n"},
 	} {
-		t.Run(text, func(t *testing.T) {
-			highlighted, err := Highlight(text, *styles.Get("native"), formatters.TTY, lexers.Get("json"))
+		t.Run(testCase.lexer+" "+testCase.text, func(t *testing.T) {
+			highlighted, err := Highlight(testCase.text, *styles.Get("native"), formatters.TTY, lexers.Get(testCase.lexer))
+			assert.NilError(t, err)
+			if highlighted != nil {
+				t.Errorf("Expected no highlighting, got %q", *highlighted)
+			}
+		})
+	}
+}
+
+// Chroma can express one appearance in more than one way: an attribute can be
+// explicitly off or just left unset, and an entry can refuse to inherit. None of
+// that is visible, so none of it makes highlighting worthwhile.
+func TestHighlightVisuallyUniformIsNoop(t *testing.T) {
+	for name, entries := range map[string]chroma.StyleEntries{
+		// "package" states that it isn't bold, "main" just doesn't mention bold
+		"attribute off vs unset": {
+			chroma.Background:       "#ffffff",
+			chroma.KeywordNamespace: "#ffffff nobold",
+			chroma.NameOther:        "#ffffff",
+		},
+
+		// Same color either way, one of them just declines to inherit it
+		"noinherit": {
+			chroma.Background:       "#ffffff",
+			chroma.KeywordNamespace: "#ffffff noinherit",
+			chroma.NameOther:        "#ffffff",
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			style := chroma.MustNewStyle(name, entries)
+
+			highlighted, err := Highlight("package main\n", *style, formatters.TTY16m, lexers.Get("Go"))
 			assert.NilError(t, err)
 			if highlighted != nil {
 				t.Errorf("Expected no highlighting, got %q", *highlighted)
