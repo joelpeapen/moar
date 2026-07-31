@@ -27,12 +27,13 @@ func Highlight(text string, style chroma.Style, formatter chroma.Formatter, lexe
 		return nil, nil
 	}
 
-	// FIXME: Can we test for the lexer implementation class instead? That
-	// should be more resilient towards this arbitrary string changing if we
-	// upgrade Chroma at some point.
+	// Chroma offers nothing better to test against: every lexer built from its
+	// XML files is a *chroma.RegexLexer. Matching the canonical name at least
+	// covers the aliases too, "text" and "no-highlight" among them.
 	if lexer.Config().Name == "plaintext" {
-		// This highlighter doesn't provide any highlighting, but not doing
-		// anything at all is cheaper and simpler, so we do that.
+		// Using this highlighter would paint everything in Chroma's plain text
+		// color, changing the look of input that came with escape sequences of
+		// its own. See TestHighlightPlaintextIsNoop().
 		return nil, nil
 	}
 
