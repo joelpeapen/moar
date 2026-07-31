@@ -4,11 +4,14 @@ import (
 	"bytes"
 	"encoding/json"
 	"strings"
+	"unicode"
 
 	"github.com/alecthomas/chroma/v2"
 	"github.com/alecthomas/chroma/v2/lexers"
 	"github.com/go-enry/go-enry/v2"
 	log "github.com/sirupsen/logrus"
+	"github.com/walles/moor/v2/internal/textstyles"
+	"github.com/walles/moor/v2/twin"
 )
 
 // Read and highlight some text using Chroma:
@@ -16,19 +19,21 @@ import (
 //
 // If lexer is nil no highlighting will be performed.
 //
-// Returns nil with no error if highlighting would be a no-op.
+// Returns nil with no error if highlighting would be a no-op, which includes the
+// case where every visible character would end up looking the same.
 func Highlight(text string, style chroma.Style, formatter chroma.Formatter, lexer chroma.Lexer) (*string, error) {
 	if lexer == nil {
 		// No highlighter available for this file type
 		return nil, nil
 	}
 
-	// FIXME: Can we test for the lexer implementation class instead? That
-	// should be more resilient towards this arbitrary string changing if we
-	// upgrade Chroma at some point.
+	// Chroma offers nothing better to test against: every lexer built from its
+	// XML files is a *chroma.RegexLexer. Matching the canonical name at least
+	// covers the aliases too, "text" and "no-highlight" among them.
 	if lexer.Config().Name == "plaintext" {
-		// This highlighter doesn't provide any highlighting, but not doing
-		// anything at all is cheaper and simpler, so we do that.
+		// Using this highlighter would paint everything in Chroma's plain text
+		// color, changing the look of input that came with escape sequences of
+		// its own. See TestHighlightPlaintextIsNoop().
 		return nil, nil
 	}
 
@@ -53,6 +58,9 @@ func Highlight(text string, style chroma.Style, formatter chroma.Formatter, lexe
 	}
 
 	highlighted := stringBuffer.String()
+	if isUniformlyStyled(highlighted) {
+		return nil, nil
+	}
 
 	// If buffer ends with SGR Reset ("<ESC>[0m"), remove it. Chroma sometimes
 	// (always?) puts one of those by itself on the last line, making us believe
@@ -61,6 +69,46 @@ func Highlight(text string, style chroma.Style, formatter chroma.Formatter, lexe
 	trimmed := strings.TrimSuffix(highlighted, sgrReset)
 
 	return &trimmed, nil
+}
+
+// Reports whether every visible character of some highlighted text looks the
+// same, making the highlighting pointless.
+//
+// Whitespace shows nothing but its background color, so only backgrounds count
+// for whitespace.
+func isUniformlyStyled(highlighted string) bool {
+	var initialBackground *twin.Color
+	var firstVisibleStyle *twin.Style
+
+	for line := range strings.SplitSeq(highlighted, "\n") {
+		// Line by line because that's how it will be rendered, and moor starts
+		// each line from a clean slate. The nil line index is only used for
+		// error reporting.
+		for _, cell := range textstyles.StyledRunesFromString(twin.StyleDefault, line, nil, 0).StyledRunes {
+			background := cell.Style.Background()
+			if initialBackground == nil {
+				initialBackground = &background
+			} else if background != *initialBackground {
+				return false
+			}
+
+			if unicode.IsSpace(cell.Rune) {
+				// The background is all that shows through whitespace, and it matched
+				continue
+			}
+
+			if firstVisibleStyle == nil {
+				firstVisibleStyle = &cell.Style
+				continue
+			}
+
+			if !cell.Style.Equal(*firstVisibleStyle) {
+				return false
+			}
+		}
+	}
+
+	return true
 }
 
 // We expect this to be executed in a goroutine
