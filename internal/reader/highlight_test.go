@@ -116,6 +116,24 @@ func TestHighlightVisuallyUniformIsNoop(t *testing.T) {
 	}
 }
 
+// The plaintext lexer has nothing to add. In particular, escape sequences
+// already in the input must be left alone rather than wrapped in Chroma's
+// styling, which would repaint the parts the author left uncolored.
+func TestHighlightPlaintextIsNoop(t *testing.T) {
+	for _, text := range []string{
+		"plain text here\n",
+		"already \x1b[31mred\x1b[0m text\n",
+	} {
+		t.Run(text, func(t *testing.T) {
+			highlighted, err := Highlight(text, *styles.Get("native"), formatters.TTY, lexers.Get("plaintext"))
+			assert.NilError(t, err)
+			if highlighted != nil {
+				t.Errorf("Expected no highlighting, got %q", *highlighted)
+			}
+		})
+	}
+}
+
 // A JSON object gets punctuation, key names and values in different colors, so
 // highlighting it is worthwhile.
 func TestHighlightJsonObject(t *testing.T) {
