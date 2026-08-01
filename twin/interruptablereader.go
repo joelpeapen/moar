@@ -112,6 +112,23 @@ func (r *interruptableReader) Read(p []byte) (n int, err error) {
 		// either.
 		r.reassert(r.base)
 
+		// Waiting out a pause can also have made our readiness stale: whoever
+		// paused us is likely to have consumed the input we were told about.
+		// Check again rather than block in the read below while holding the
+		// semaphore, which would leave pausing waiting for a keypress that
+		// nobody is going to make.
+		//
+		// Zero timeout, so this is a poll rather than a wait.
+		ready, waitErr = r.waitForReadReady(0)
+		if waitErr != nil {
+			r.pauseOrRead.Release(1)
+			return 0, waitErr
+		}
+		if !ready {
+			r.pauseOrRead.Release(1)
+			continue
+		}
+
 		n, err = r.base.Read(p)
 		r.pauseOrRead.Release(1)
 
