@@ -66,9 +66,9 @@ func NewFromFilename(filename string, formatter chroma.Formatter, options Reader
 
 // NewFromStream creates a new stream reader
 //
-// Note that if the provided io.Reader also implements io.Closer, it will be
-// automatically closed once the reader has finished consuming its initial
-// content.
+// The reader takes ownership of the stream: if it implements io.Closer it will
+// be closed once we have consumed its initial content, or on reader.Close(),
+// whichever comes first.
 //
 // The display name can be an empty string ("").
 //
@@ -99,8 +99,9 @@ func NewFromStream(displayName string, reader io.Reader, formatter chroma.Format
 
 // newReaderFromStream creates a new stream reader
 //
-// If the provided io.Reader also implements io.Closer, it will be automatically
-// closed once the reader has finished consuming its initial content.
+// The reader takes ownership of the stream: if it implements io.Closer it will
+// be closed once we have consumed its initial content, or on reader.Close(),
+// whichever comes first.
 //
 // originalFileName is used for counting the lines in the file. nil for
 // don't-know (streams) or not countable (compressed files). The line count is
@@ -130,9 +131,12 @@ func newReaderFromStream(reader io.Reader, originalFileName *string, formatter c
 		basename := filepath.Base(*originalFileName)
 		displayFileName = &basename
 	}
+	streamCloser, _ := reader.(io.Closer)
 	returnMe := ReaderImpl{
 		FileName:    originalFileName,
 		DisplayName: displayFileName,
+
+		streamCloser: streamCloser,
 
 		pauseAfterLines:        pauseAfterLines,
 		pauseAfterLinesUpdated: make(chan bool, 1),

@@ -156,6 +156,10 @@ func getColorFormatter() chroma.Formatter {
 }
 
 func pageFromReader(reader *internalReader.ReaderImpl, options Options) error {
+	// Closing the reader closes the stream it came from, which is what our
+	// callers promise their callers
+	defer reader.Close()
+
 	pager := internal.NewPager(reader)
 	pager.WrapLongLines = options.WrapLongLines
 	pager.ShowLineNumbers = !options.NoLineNumbers

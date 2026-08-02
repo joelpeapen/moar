@@ -18,13 +18,9 @@ import (
 func (reader *ReaderImpl) readStream(stream io.Reader, formatter chroma.Formatter, options ReaderOptions) {
 	reader.consumeLinesFromStream(stream)
 
-	if closer, ok := stream.(io.Closer); ok {
-		// Close the initial stream as soon as we're done reading it,
-		// well before we start tailing or doing expensive highlighting.
-		if err := closer.Close(); err != nil {
-			log.Debug("Failed to close stream after reading initial contents: ", err)
-		}
-	}
+	// Close the initial stream as soon as we're done reading it, well before we
+	// start tailing or doing expensive highlighting.
+	reader.closeStream()
 
 	reader.ReadingDone.Store(true)
 	select {

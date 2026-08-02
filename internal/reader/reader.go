@@ -151,6 +151,26 @@ type ReaderImpl struct {
 
 	// Set to true when this reader is discarded.
 	closed atomic.Bool
+
+	// The stream we are reading from, if it can be closed at all. We own it, so
+	// we close it either once we're done reading it or when this reader is
+	// closed, whichever happens first.
+	streamCloser    io.Closer
+	closeStreamOnce sync.Once
+}
+
+// Close the stream we're reading from. Does nothing if there is no closable
+// stream, or if it has been closed already.
+func (reader *ReaderImpl) closeStream() {
+	reader.closeStreamOnce.Do(func() {
+		if reader.streamCloser == nil {
+			return
+		}
+
+		if err := reader.streamCloser.Close(); err != nil {
+			log.Debug("Failed to close stream: ", err)
+		}
+	})
 }
 
 // InputLines contains a number of lines from the reader, plus metadata
@@ -601,9 +621,14 @@ func (reader *ReaderImpl) SetStyleForHighlighting(style chroma.Style) {
 }
 
 // Close stops background routines and prevents further reading.
+//
+// The stream we were created from gets closed, which is how a producer still
+// writing into it finds out that nobody is listening any more.
 func (reader *ReaderImpl) Close() {
 	reader.closed.Store(true)
 
 	// Unblock any active pause
 	reader.SetPauseAfterLines(math.MaxInt)
+
+	reader.closeStream()
 }
