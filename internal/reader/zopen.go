@@ -26,7 +26,15 @@ func ZOpen(filename string) (io.ReadCloser, string, error) {
 		return nil, "", err
 	}
 
-	_, err = file.Seek(0, 0)
+	return zOpenFile(file, filename)
+}
+
+// Decompress file based on its contents, with filename only used for naming the
+// result.
+//
+// Takes ownership of file: closing the returned reader closes it.
+func zOpenFile(file *os.File, filename string) (io.ReadCloser, string, error) {
+	_, err := file.Seek(0, 0)
 	if err != nil {
 		// File is not seekable, so we can't probe its contents.
 		// https://github.com/walles/moor/issues/385
