@@ -630,5 +630,24 @@ func (reader *ReaderImpl) Close() {
 	// Unblock any active pause
 	reader.SetPauseAfterLines(math.MaxInt)
 
+	// zstd isn't safe to Close() while something might still be concurrently
+	// reading from it. zstdCloser implements this to offer a narrower
+	// alternative that's always safe to call: interrupting just the
+	// underlying raw source, enough to unblock a concurrent Read().
+	type interruptibleCloser interface {
+		interrupt() error
+	}
+
+	if interruptible, ok := reader.streamCloser.(interruptibleCloser); ok {
+		// Closing the stream here could race with a Read() still in flight in
+		// the reading goroutine, so just unblock that Read() instead. The
+		// reading goroutine does the actual close, from closeStream(), once
+		// it's done with the stream.
+		if err := interruptible.interrupt(); err != nil {
+			log.Debug("Failed to interrupt stream: ", err)
+		}
+		return
+	}
+
 	reader.closeStream()
 }

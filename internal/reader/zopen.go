@@ -8,6 +8,7 @@ import (
 	"io"
 	"os"
 	"strings"
+	"sync"
 
 	"github.com/klauspost/compress/zstd"
 	log "github.com/sirupsen/logrus"
@@ -23,21 +24,52 @@ var xzMagic = []byte{0xfd, 0x37, 0x7a, 0x58, 0x5a, 0x00}
 //
 // The zstd decompressor works in goroutines that only its own Close() stops,
 // and that Close() returns no error, so it can't be an io.Closer by itself.
+//
+// The decompressor isn't safe for concurrent use with Close(), so Close()
+// must only be called once nothing is concurrently reading from it. To
+// unblock a concurrent Read() instead, call interrupt().
 type zstdCloser struct {
 	decompressor *zstd.Decoder
 
 	// What the decompressor is reading from, nil if we don't own it
 	compressed io.Closer
+
+	// Close() and interrupt() can both end up closing compressed; this makes
+	// sure that only happens once.
+	closeCompressedOnce *sync.Once
+}
+
+func newZstdCloser(decompressor *zstd.Decoder, compressed io.Closer) zstdCloser {
+	return zstdCloser{
+		decompressor:        decompressor,
+		compressed:          compressed,
+		closeCompressedOnce: &sync.Once{},
+	}
+}
+
+func (closer zstdCloser) closeCompressed() error {
+	if closer.compressed == nil {
+		return nil
+	}
+
+	var err error
+	closer.closeCompressedOnce.Do(func() {
+		err = closer.compressed.Close()
+	})
+	return err
 }
 
 func (closer zstdCloser) Close() error {
 	closer.decompressor.Close()
 
-	if closer.compressed == nil {
-		return nil
-	}
+	return closer.closeCompressed()
+}
 
-	return closer.compressed.Close()
+// interrupt unblocks a concurrent in-flight Read() by closing what the
+// decompressor reads from, without touching the decompressor itself. Unlike
+// Close(), this is safe to call while a Read() is in flight.
+func (closer zstdCloser) interrupt() error {
+	return closer.closeCompressed()
 }
 
 // The second return value is the file name with any compression extension removed.
@@ -116,10 +148,13 @@ func zOpenFile(file *os.File, filename string) (io.ReadCloser, string, error) {
 		newName := strings.TrimSuffix(filename, ".zst")
 		newName = strings.TrimSuffix(newName, ".zstd")
 
+		// zstdCloser is embedded concretely rather than behind io.Closer, so
+		// that its interrupt() method (see below) is promoted to this struct
+		// too, not just Close().
 		return struct {
 			io.Reader
-			io.Closer
-		}{decoder, zstdCloser{decoder, file}}, newName, nil
+			zstdCloser
+		}{decoder, newZstdCloser(decoder, file)}, newName, nil
 
 	case bytes.HasPrefix(firstBytes, xzMagic):
 		log.Debugf("File is xz compressed: %v", filename)
@@ -201,7 +236,12 @@ func ZReader(input io.Reader) (io.Reader, error) {
 			return nil, err
 		}
 
-		return withCloser(zstdReader, zstdCloser{zstdReader, closer}), nil
+		// Not using withCloser(): it stores its closer behind the io.Closer
+		// interface, which would only promote Close() and hide interrupt().
+		return struct {
+			io.Reader
+			zstdCloser
+		}{zstdReader, newZstdCloser(zstdReader, closer)}, nil
 
 	case bytes.HasPrefix(firstBytes, bzip2Magic):
 		log.Info("Input stream is bzip2 compressed")
