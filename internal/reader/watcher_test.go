@@ -2,6 +2,7 @@ package reader
 
 import (
 	"os"
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -241,4 +242,28 @@ func TestDetermineTailAction(t *testing.T) {
 			assert.Equal(t, actual, tt.expected)
 		})
 	}
+}
+
+// Repro for https://github.com/walles/moor/issues/435
+func TestDetermineTailAction_gzippedUnchanged(t *testing.T) {
+	gzippedName := filepath.Join("..", "..", "sample-files", "compressed.txt.gz")
+
+	testMe, err := NewFromFilename(gzippedName,
+		formatters.TTY, ReaderOptions{Style: styles.Get("native")})
+	assert.NilError(t, err)
+
+	assert.NilError(t, testMe.Wait())
+
+	assert.Equal(t, len(testMe.headerBytes) > 0, true)
+
+	action := determineTailAction(
+		gzippedName,
+		true, // isCompressed
+		fakeFileInfo{size: 1234, modTime: time.Unix(1000, 0)},
+		fakeFileInfo{size: 1234, modTime: time.Unix(1000, 0)},
+		nil, // statErr
+		testMe.headerBytes,
+	)
+
+	assert.Equal(t, action, tailActionContinue)
 }

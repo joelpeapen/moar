@@ -46,7 +46,7 @@ func testCanonicalize1000(t *testing.T, withStatusBar bool, currentStartLine lin
 }
 
 func TestCanonicalize1000WithStatusBar(t *testing.T) {
-	for startLine := 0; startLine < 1500; startLine++ {
+	for startLine := range 1500 {
 		t.Run(fmt.Sprint("startLine=", startLine), func(t *testing.T) {
 			testCanonicalize1000(t, true,
 				linemetadata.IndexFromZeroBased(startLine),
@@ -57,7 +57,7 @@ func TestCanonicalize1000WithStatusBar(t *testing.T) {
 }
 
 func TestCanonicalize1000WithoutStatusBar(t *testing.T) {
-	for startLine := 0; startLine < 1500; startLine++ {
+	for startLine := range 1500 {
 		t.Run(fmt.Sprint("startLine=", startLine), func(t *testing.T) {
 			testCanonicalize1000(t, true,
 				linemetadata.IndexFromZeroBased(startLine),

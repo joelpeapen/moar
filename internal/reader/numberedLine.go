@@ -18,10 +18,10 @@ func (nl *NumberedLine) Plain() string {
 	return nl.Line.Plain(nl.Index)
 }
 
-// maxTokensCount: at most this many tokens will be included in the result. If
-// 0, do all runes. For BenchmarkRenderHugeLine() performance.
-func (nl *NumberedLine) HighlightedTokens(plainTextStyle twin.Style, searchHitStyle twin.Style, search search.Search, maxTokensCount int) textstyles.StyledRunesWithTrailer {
-	return nl.Line.HighlightedTokens(plainTextStyle, searchHitStyle, search, nl.Index, maxTokensCount)
+// maxCellsCount: at most this many cells will be included in the result. If 0,
+// there is no limit. For BenchmarkRenderHugeLine() performance.
+func (nl *NumberedLine) HighlightedTokens(plainTextStyle twin.Style, searchHitStyle twin.Style, search search.Search, maxCellsCount int) textstyles.StyledRunesWithTrailer {
+	return nl.Line.HighlightedTokens(plainTextStyle, searchHitStyle, search, nl.Index, maxCellsCount)
 }
 
 func (nl *NumberedLine) DisplayWidth() int {

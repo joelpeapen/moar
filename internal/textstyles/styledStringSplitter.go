@@ -12,13 +12,31 @@ import (
 
 const esc = '\x1b'
 
+// Safe upper bound on how many input bytes can go into one screen cell. On a
+// man page, when there are no escape sequences involved: at most seven runes
+// per cell (the man page bullet '+', backspace, '+', backspace, 'o', backspace,
+// 'o'), at most utf8.UTFMax bytes per rune.
+//
+// Loose on purpose, since those two maxima cannot co-occur: bullets are ASCII.
+// The densest cell really is a bold underlined four byte rune ('_', backspace,
+// 𝕏, backspace, 𝕏) at eleven bytes. Erring high only costs a few scanned
+// bytes, erring low renders the wrong thing.
+const maxBytesPerCell = 7 * utf8.UTFMax
+
 type styledStringSplitter struct {
 	input          string
 	lineIndex      *linemetadata.Index // Used for error reporting
 	plainTextStyle twin.Style
 
-	maxTokensCount     int
-	reportedRunesCount int
+	maxCellsCount int
+
+	// Report the current part once it has buffered this many bytes, giving the
+	// callback a chance to stop us. 0 means never.
+	flushAtBytes int
+
+	// Set once the callback has reported all the cells we were asked for. No
+	// remaining input can affect the result, so we stop looking at it.
+	done bool
 
 	nextByteIndex     int
 	previousByteIndex int
@@ -29,17 +47,41 @@ type styledStringSplitter struct {
 
 	trailer twin.Style
 
-	callback func(str string, style twin.Style)
+	// Returns the total number of cells rendered so far, counting all calls.
+	// Compared against maxCellsCount.
+	callback func(str string, style twin.Style) int
 }
 
 // Returns the style of the line's trailer.
 //
 // The lineIndex is only used for error reporting.
 //
-// maxTokensCount: at most this many tokens will be included in the result. If
-// 0, do all runes. For BenchmarkRenderHugeLine() performance.
-func styledStringsFromString(plainTextStyle twin.Style, s string, lineIndex *linemetadata.Index, maxTokensCount int, callback func(string, twin.Style)) twin.Style {
-	if !strings.ContainsAny(s, "\x1b") {
+// The callback must return the total number of cells it has rendered so far,
+// counting all calls. We can't count that ourselves: input runes are not cells,
+// since man page backspace sequences take several input runes per cell, and a
+// TAB takes one input rune but renders as several cells.
+//
+// maxCellsCount: stop parsing once the callback reports this many cells. If 0,
+// there is no limit. For BenchmarkRenderHugeLine() performance.
+//
+// With a limit set, the returned trailer is only accurate if fewer than
+// maxCellsCount cells were reported. A full result fills the row, so there is
+// nothing left for the trailer to paint.
+func styledStringsFromString(plainTextStyle twin.Style, s string, lineIndex *linemetadata.Index, maxCellsCount int, callback func(string, twin.Style) int) twin.Style {
+	// The cells we report can only come from this many leading input bytes, see
+	// maxBytesPerCell. So nothing past here can affect our result, neither an
+	// escape sequence nor more text. 0 means no limit was requested.
+	//
+	// Performance sensitive, see BenchmarkRenderHugeLine() and
+	// TestCellsLimitOnlyTruncates().
+	relevantBytesCount := maxCellsCount * maxBytesPerCell
+
+	escapeScanWindow := s
+	if relevantBytesCount > 0 && relevantBytesCount < len(s) {
+		escapeScanWindow = s[:relevantBytesCount]
+	}
+
+	if !strings.ContainsRune(escapeScanWindow, esc) {
 		// This shortcut makes BenchmarkPlainTextSearch() perform a lot better
 		callback(s, plainTextStyle)
 		return plainTextStyle
@@ -49,7 +91,8 @@ func styledStringsFromString(plainTextStyle twin.Style, s string, lineIndex *lin
 		input:           s,
 		lineIndex:       lineIndex,
 		plainTextStyle:  plainTextStyle, // How plain text should be styled
-		maxTokensCount:  maxTokensCount,
+		maxCellsCount:   maxCellsCount,
+		flushAtBytes:    relevantBytesCount,
 		inProgressStyle: plainTextStyle, // Plain text style until something else comes along
 		callback:        callback,
 		trailer:         plainTextStyle, // Plain text style until something else comes along
@@ -84,7 +127,7 @@ func (s *styledStringSplitter) lastChar() rune {
 func (s *styledStringSplitter) run() {
 	char := s.nextChar()
 	for {
-		if char == -1 {
+		if char == -1 || s.done {
 			s.finalizeCurrentPart()
 			return
 		}
@@ -106,6 +149,9 @@ func (s *styledStringSplitter) run() {
 				// character as just plain runes.
 				for _, char := range s.input[escIndex:s.previousByteIndex] {
 					s.handleRune(char)
+					if s.done {
+						break
+					}
 				}
 
 				// Start over with the character that caused the problem
@@ -122,6 +168,13 @@ func (s *styledStringSplitter) run() {
 
 func (s *styledStringSplitter) handleRune(char rune) {
 	s.inProgressString.WriteRune(char)
+
+	// A long run with no style changes would otherwise stay buffered until the
+	// end of the line. Once we have buffered every byte that could contribute to
+	// the requested cells, let the callback stop us.
+	if s.flushAtBytes > 0 && s.inProgressString.Len() >= s.flushAtBytes {
+		s.finalizeCurrentPart()
+	}
 }
 
 func (s *styledStringSplitter) handleEscape() error {
@@ -463,22 +516,25 @@ func (s *styledStringSplitter) startNewPart(style twin.Style) {
 	}
 
 	s.finalizeCurrentPart()
-	s.inProgressString.Reset()
 	s.inProgressStyle = style
 }
 
+// Report whatever we have buffered to the callback, and empty the buffer. Sets
+// done if the callback has now rendered all the cells we were asked for.
+//
+// Resetting rather than truncating matters: the string we hand the callback
+// shares the builder's buffer, and Reset() replaces that buffer instead of
+// writing over it.
 func (s *styledStringSplitter) finalizeCurrentPart() {
 	if s.inProgressString.Len() == 0 {
 		// Nothing to do
 		return
 	}
 
-	partString := s.inProgressString.String()
-	s.callback(partString, s.inProgressStyle)
-	s.reportedRunesCount += utf8.RuneCountInString(partString)
+	totalCellsCount := s.callback(s.inProgressString.String(), s.inProgressStyle)
+	s.inProgressString.Reset()
 
-	if s.maxTokensCount > 0 && s.reportedRunesCount >= s.maxTokensCount {
-		// We've reported enough runes, stop processing any further input
-		s.nextByteIndex = len(s.input)
+	if s.maxCellsCount > 0 && totalCellsCount >= s.maxCellsCount {
+		s.done = true
 	}
 }

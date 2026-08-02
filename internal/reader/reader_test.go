@@ -363,7 +363,7 @@ func BenchmarkReadLargeFile(b *testing.B) {
 // Try loading a file with a long line
 func BenchmarkReadLongLine(b *testing.B) {
 	// Try loading a line this long
-	const longLineBytes = 3_000_000
+	const longLineBytes = 32_000_000
 
 	// First, create it from something...
 	lineBytes := []byte(strings.Repeat("x", longLineBytes-1) + "\n")

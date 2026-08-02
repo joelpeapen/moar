@@ -24,7 +24,17 @@ if [ "$GOARCH" == "386" ]; then
   # -race is not supported on i386
   RACE=""
 fi
-go test $RACE -timeout 20s ./...
+# Report races into files named like moor.sh does, so they stick around and
+# annoy us until dealt with. Absolute path, otherwise each report lands in its
+# own package's directory rather than here.
+#
+# Not in CI though: log_path silences the report on stdout, and the file dies
+# with the runner, so there we'd lose the report entirely.
+RACE_REPORTS=""
+if [ -z "${CI}" ]; then
+  RACE_REPORTS="log_path=${PWD}/moor-race-report"
+fi
+GORACE="${RACE_REPORTS}" go test $RACE -timeout 20s ./...
 
 # Ensure we can cross compile
 # NOTE: Make sure this list matches the one in release.sh

@@ -1,8 +1,6 @@
 package twin
 
-type Event interface {
-	// This interface will be blank until further notice
-}
+type Event any
 
 type EventRune struct {
 	rune rune

@@ -18,13 +18,9 @@ import (
 func (reader *ReaderImpl) readStream(stream io.Reader, formatter chroma.Formatter, options ReaderOptions) {
 	reader.consumeLinesFromStream(stream)
 
-	if closer, ok := stream.(io.Closer); ok {
-		// Close the initial stream as soon as we're done reading it,
-		// well before we start tailing or doing expensive highlighting.
-		if err := closer.Close(); err != nil {
-			log.Debug("Failed to close stream after reading initial contents: ", err)
-		}
-	}
+	// Close the initial stream as soon as we're done reading it, well before we
+	// start tailing or doing expensive highlighting.
+	reader.closeStream()
 
 	reader.ReadingDone.Store(true)
 	select {
@@ -102,19 +98,31 @@ func (reader *ReaderImpl) assumeLockAndAddLine(line []byte, considerAppending bo
 		return pauseDuration
 	}
 
-	// Special case, append to the previous line
-	baseLine := reader.lines[len(reader.lines)-1]
+	// Special case, extend the previous line. Performance sensitive, validate
+	// changes with BenchmarkReadLongLine().
+	// Ref: https://github.com/walles/moor/issues/358
+	lastIndex := len(reader.lines) - 1
+	baseLine := reader.lines[lastIndex]
 
-	// Build the complete line
-	completeLine := make([]byte, len(baseLine.raw)+len(line))
-	copy(completeLine, baseLine.raw)
-	copy(completeLine[len(baseLine.raw):], line)
-
-	baseLine.raw = completeLine
-	baseLine.plainTextCache.Store(nil) // Invalidate cache
+	// Publish a longer replacement rather than growing baseLine in place.
+	// Renderers keep using *Line values after dropping our lock, so a published
+	// Line's raw field must never be written again. See Line.rawString().
+	//
+	// Not from linePool: pooled Lines share one backing array, so a superseded
+	// pool entry would keep its (now stale) raw bytes from being collected.
+	reader.lines[lastIndex] = &Line{raw: append(baseLine.raw, line...)}
 
 	return 0
 }
+
+// How much we read from the stream at a time. Lines longer than this arrive in
+// several pieces.
+//
+// This value affects BenchmarkReadLargeFile() performance. Validate changes
+// like this:
+//
+//	go test -benchmem -run='^$' -bench 'BenchmarkReadLargeFile' ./internal/reader
+const byteBufferSize = 16 * 1024
 
 // This function will update the Reader struct. It is expected to run in a
 // goroutine.
@@ -122,12 +130,6 @@ func (reader *ReaderImpl) assumeLockAndAddLine(line []byte, considerAppending bo
 // It is used both during the initial read of the stream until it ends, and
 // while tailing files for changes.
 func (reader *ReaderImpl) consumeLinesFromStream(stream io.Reader) {
-	// This value affects BenchmarkReadLargeFile() performance. Validate changes
-	// like this:
-	//
-	//   go test -benchmem -run='^$' -bench 'BenchmarkReadLargeFile' ./internal/reader
-	const byteBufferSize = 16 * 1024
-
 	t0 := time.Now()
 
 	// Preallocating the line pool and the lines slice improves large file

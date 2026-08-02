@@ -34,8 +34,14 @@ var TabSize = 4
 const BACKSPACE = '\b'
 
 type StyledRunesWithTrailer struct {
-	StyledRunes       []CellWithMetadata
-	Trailer           twin.Style
+	StyledRunes []CellWithMetadata
+
+	// Style for padding the rest of the screen row, once StyledRunes run out. A
+	// "clear to end of line" escape sequence in the input sets this, so that the
+	// cleared part of the row gets the style that was in effect. twin.StyleDefault
+	// means no padding is needed.
+	Trailer twin.Style
+
 	ContainsSearchHit bool
 }
 
@@ -63,7 +69,7 @@ func StripFormatting(s string, lineIndex linemetadata.Index) string {
 	stripped.Grow(len(s)) // This makes BenchmarkStripFormatting 6% faster
 	runeCount := 0
 
-	styledStringsFromString(twin.StyleDefault, s, &lineIndex, 0, func(str string, style twin.Style) {
+	styledStringsFromString(twin.StyleDefault, s, &lineIndex, 0, func(str string, style twin.Style) int {
 		for _, runeValue := range runesFromStyledString(_StyledString{String: str, Style: style}) {
 			switch runeValue {
 
@@ -103,6 +109,8 @@ func StripFormatting(s string, lineIndex linemetadata.Index) string {
 				runeCount++
 			}
 		}
+
+		return runeCount
 	})
 
 	return stripped.String()
@@ -113,25 +121,44 @@ func StripFormatting(s string, lineIndex linemetadata.Index) string {
 // The prefix will be prepended to the string before parsing. The lineIndex is
 // used for error reporting.
 //
-// maxTokensCount: at most this many tokens will be included in the result. If
-// 0, do all runes. For BenchmarkRenderHugeLine() performance.
-func StyledRunesFromString(plainTextStyle twin.Style, s string, lineIndex *linemetadata.Index, maxTokensCount int) StyledRunesWithTrailer {
+// maxCellsCount: at most this many cells will be included in the result. If 0,
+// there is no limit. For BenchmarkRenderHugeLine() performance.
+//
+// With a limit set, the returned Trailer is only accurate if fewer than
+// maxCellsCount cells came back. A full result fills the row, so there is
+// nothing left for the trailer to paint.
+func StyledRunesFromString(plainTextStyle twin.Style, s string, lineIndex *linemetadata.Index, maxCellsCount int) StyledRunesWithTrailer {
 	manPageHeading := manPageHeadingFromString(s)
 	if manPageHeading != nil {
 		return *manPageHeading
 	}
 
 	capacity := len(s)
-	if maxTokensCount > 0 && maxTokensCount < capacity {
-		capacity = maxTokensCount
+	if maxCellsCount > 0 && maxCellsCount < capacity {
+		capacity = maxCellsCount
 	}
 	cells := make([]CellWithMetadata, 0, capacity)
 
 	// Specs: https://en.wikipedia.org/wiki/ANSI_escape_code#3-bit_and_4-bit
 	styleUnprintable := twin.StyleDefault.WithBackground(twin.NewColor16(1)).WithForeground(twin.NewColor16(7))
 
-	trailer := styledStringsFromString(plainTextStyle, s, lineIndex, maxTokensCount, func(str string, style twin.Style) {
-		for _, token := range tokensFromStyledString(_StyledString{String: str, Style: style}, maxTokensCount) {
+	trailer := styledStringsFromString(plainTextStyle, s, lineIndex, maxCellsCount, func(str string, style twin.Style) int {
+		// Ask only for the cells we still have room for
+		remainingCellsCount := 0 // Zero means no limit
+		if maxCellsCount > 0 {
+			remainingCellsCount = maxCellsCount - len(cells)
+			if remainingCellsCount <= 0 {
+				return len(cells)
+			}
+		}
+
+		for _, token := range tokensFromStyledString(_StyledString{String: str, Style: style}, remainingCellsCount) {
+			if maxCellsCount > 0 && len(cells) >= maxCellsCount {
+				// Enough cells. We check here rather than trusting the token
+				// count, because one token can render as several cells.
+				break
+			}
+
 			switch token.Rune {
 
 			case '\x09': // TAB
@@ -193,6 +220,8 @@ func StyledRunesFromString(plainTextStyle twin.Style, s string, lineIndex *linem
 				})
 			}
 		}
+
+		return len(cells)
 	})
 
 	return StyledRunesWithTrailer{
@@ -378,23 +407,23 @@ func runesFromStyledString(styledString _StyledString) string {
 	return returnMe.String()
 }
 
-// maxTokensCount: at most this many tokens will be included in the result. If
-// 0, do all runes. For BenchmarkRenderHugeLine() performance.
-func tokensFromStyledString(styledString _StyledString, maxTokensCount int) []twin.StyledRune {
+// maxCellsCount: at most this many cells will be included in the result. If 0,
+// there is no limit. For BenchmarkRenderHugeLine() performance.
+func tokensFromStyledString(styledString _StyledString, maxCellsCount int) []twin.StyledRune {
 	maxBackspaceCheck := len(styledString.String)
-	if maxTokensCount > 0 && maxTokensCount < maxBackspaceCheck {
-		maxBackspaceCheck = maxTokensCount + 20 // Some extra to account for backspaces further out
+	if maxCellsCount > 0 && maxCellsCount < maxBackspaceCheck {
+		maxBackspaceCheck = maxCellsCount + 20 // Some extra to account for backspaces further out
 	}
 	if maxBackspaceCheck > len(styledString.String) {
 		maxBackspaceCheck = len(styledString.String)
 	}
 	if !strings.ContainsRune(styledString.String[:maxBackspaceCheck], BACKSPACE) {
 		// Shortcut when there's no backspace based formatting to worry about
-		returnTokensCount := len(styledString.String)
-		if maxTokensCount > 0 && returnTokensCount > maxTokensCount {
-			returnTokensCount = maxTokensCount
+		returnCellsCount := len(styledString.String)
+		if maxCellsCount > 0 && returnCellsCount > maxCellsCount {
+			returnCellsCount = maxCellsCount
 		}
-		tokens := make([]twin.StyledRune, 0, returnTokensCount)
+		tokens := make([]twin.StyledRune, 0, returnCellsCount)
 		for _, runeValue := range styledString.String {
 			if len(tokens) == cap(tokens) {
 				// We have enough runes, stop here
@@ -409,12 +438,12 @@ func tokensFromStyledString(styledString _StyledString, maxTokensCount int) []tw
 		return tokens
 	}
 
-	tokens := make([]twin.StyledRune, 0, maxTokensCount)
+	tokens := make([]twin.StyledRune, 0, maxCellsCount)
 
 	// Special handling for man page formatted lines. If this is updated you
 	// must update HasManPageFormatting() as well.
 	for runes := (lazyRunes{str: styledString.String}); runes.getRelative(0) != nil; runes.next() {
-		if maxTokensCount > 0 && len(tokens) >= maxTokensCount {
+		if maxCellsCount > 0 && len(tokens) >= maxCellsCount {
 			// We have enough runes, stop here
 			break
 		}
@@ -452,8 +481,29 @@ func tokensFromStyledString(styledString _StyledString, maxTokensCount int) []tw
 	return tokens
 }
 
+// How far into a line we look for man page formatting. Man pages are
+// pre-formatted to a fixed width, so their overstrike sits near the start of a
+// line: across 14801 man pages from /usr/share/man and Homebrew the deepest was
+// 44 bytes in at MANWIDTH 80, and 203 bytes at MANWIDTH 400.
+//
+// That is about half a byte per column, so this budget covers pages formatted
+// for a 4000 column terminal. A constant rather than our own terminal width,
+// because what matters is the width the page was formatted for, and that can be
+// wider than the terminal we are showing it in.
+const manPageFormattingScanBytes = 2 * 1024
+
 // Like tokensFromStyledString(), but only checks without building any formatting
+//
+// Only the first manPageFormattingScanBytes bytes are examined, so formatting
+// further in goes unnoticed. Performance sensitive, see BenchmarkDetectManPage()
+// and TestHasManPageFormattingOnlyScansLineStart().
 func HasManPageFormatting(s string) bool {
+	if len(s) > manPageFormattingScanBytes {
+		// Cutting mid-rune is fine, the partial rune decodes into
+		// utf8.RuneError which matches none of the formatting we look for.
+		s = s[:manPageFormattingScanBytes]
+	}
+
 	for runes := (lazyRunes{str: s}); runes.getRelative(0) != nil; runes.next() {
 		consumed := consumeBullet(&runes)
 		if consumed != nil {

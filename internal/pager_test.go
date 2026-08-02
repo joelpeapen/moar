@@ -255,14 +255,13 @@ func TestCodeHighlight_compressed(t *testing.T) {
 	var answers = []twin.StyledRune{
 		twin.NewStyledRune('#', markdownHeading1Style),
 		twin.NewStyledRune(' ', markdownHeading1Style),
-		twin.NewStyledRune('M', markdownHeading1Style),
-		twin.NewStyledRune('a', markdownHeading1Style),
+		twin.NewStyledRune('P', markdownHeading1Style),
 		twin.NewStyledRune('r', markdownHeading1Style),
-		twin.NewStyledRune('k', markdownHeading1Style),
-		twin.NewStyledRune('d', markdownHeading1Style),
 		twin.NewStyledRune('o', markdownHeading1Style),
-		twin.NewStyledRune('w', markdownHeading1Style),
-		twin.NewStyledRune('n', markdownHeading1Style),
+		twin.NewStyledRune(' ', markdownHeading1Style),
+		twin.NewStyledRune('T', markdownHeading1Style),
+		twin.NewStyledRune('i', markdownHeading1Style),
+		twin.NewStyledRune('p', markdownHeading1Style),
 	}
 
 	contents := startPaging(t, reader).GetRow(0)

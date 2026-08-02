@@ -8,6 +8,7 @@ import (
 	"io"
 	"os"
 	"strings"
+	"sync"
 
 	"github.com/klauspost/compress/zstd"
 	log "github.com/sirupsen/logrus"
@@ -19,6 +20,58 @@ var bzip2Magic = []byte{0x42, 0x5a, 0x68}
 var zstdMagic = []byte{0x28, 0xb5, 0x2f, 0xfd}
 var xzMagic = []byte{0xfd, 0x37, 0x7a, 0x58, 0x5a, 0x00}
 
+// Closes both a zstd decompressor and whatever it was decompressing.
+//
+// The zstd decompressor works in goroutines that only its own Close() stops,
+// and that Close() returns no error, so it can't be an io.Closer by itself.
+//
+// The decompressor isn't safe for concurrent use with Close(), so Close()
+// must only be called once nothing is concurrently reading from it. To
+// unblock a concurrent Read() instead, call interrupt().
+type zstdCloser struct {
+	decompressor *zstd.Decoder
+
+	// What the decompressor is reading from, nil if we don't own it
+	compressed io.Closer
+
+	// Close() and interrupt() can both end up closing compressed; this makes
+	// sure that only happens once.
+	closeCompressedOnce *sync.Once
+}
+
+func newZstdCloser(decompressor *zstd.Decoder, compressed io.Closer) zstdCloser {
+	return zstdCloser{
+		decompressor:        decompressor,
+		compressed:          compressed,
+		closeCompressedOnce: &sync.Once{},
+	}
+}
+
+func (closer zstdCloser) closeCompressed() error {
+	if closer.compressed == nil {
+		return nil
+	}
+
+	var err error
+	closer.closeCompressedOnce.Do(func() {
+		err = closer.compressed.Close()
+	})
+	return err
+}
+
+func (closer zstdCloser) Close() error {
+	closer.decompressor.Close()
+
+	return closer.closeCompressed()
+}
+
+// interrupt unblocks a concurrent in-flight Read() by closing what the
+// decompressor reads from, without touching the decompressor itself. Unlike
+// Close(), this is safe to call while a Read() is in flight.
+func (closer zstdCloser) interrupt() error {
+	return closer.closeCompressed()
+}
+
 // The second return value is the file name with any compression extension removed.
 func ZOpen(filename string) (io.ReadCloser, string, error) {
 	file, err := os.Open(filename)
@@ -26,7 +79,15 @@ func ZOpen(filename string) (io.ReadCloser, string, error) {
 		return nil, "", err
 	}
 
-	_, err = file.Seek(0, 0)
+	return zOpenFile(file, filename)
+}
+
+// Decompress file based on its contents, with filename only used for naming the
+// result.
+//
+// Takes ownership of file: closing the returned reader closes it.
+func zOpenFile(file *os.File, filename string) (io.ReadCloser, string, error) {
+	_, err := file.Seek(0, 0)
 	if err != nil {
 		// File is not seekable, so we can't probe its contents.
 		// https://github.com/walles/moor/issues/385
@@ -86,7 +147,14 @@ func ZOpen(filename string) (io.ReadCloser, string, error) {
 
 		newName := strings.TrimSuffix(filename, ".zst")
 		newName = strings.TrimSuffix(newName, ".zstd")
-		return decoder.IOReadCloser(), newName, nil
+
+		// zstdCloser is embedded concretely rather than behind io.Closer, so
+		// that its interrupt() method (see below) is promoted to this struct
+		// too, not just Close().
+		return struct {
+			io.Reader
+			zstdCloser
+		}{decoder, newZstdCloser(decoder, file)}, newName, nil
 
 	case bytes.HasPrefix(firstBytes, xzMagic):
 		log.Debugf("File is xz compressed: %v", filename)
@@ -105,12 +173,37 @@ func ZOpen(filename string) (io.ReadCloser, string, error) {
 	return file, filename, nil
 }
 
+// Make closing reader close closer as well.
+//
+// Decompressors don't close what they read from, so this is what keeps the
+// compressed stream closable.
+//
+// A nil closer gives back the reader untouched, so that closing it stays
+// impossible rather than panicking.
+func withCloser(reader io.Reader, closer io.Closer) io.Reader {
+	if closer == nil {
+		return reader
+	}
+
+	return struct {
+		io.Reader
+		io.Closer
+	}{reader, closer}
+}
+
 // ZReader returns a reader that decompresses the input stream. Any input stream
 // compression will be automatically detected. Uncompressed streams will be
 // returned as-is.
 //
+// If the input is an io.Closer then so is the returned reader, and closing that
+// closes the input.
+//
 // Ref: https://github.com/walles/moor/issues/261
 func ZReader(input io.Reader) (io.Reader, error) {
+	// Kept across the decompressor wrapping below, which would otherwise lose
+	// it
+	closer, _ := input.(io.Closer)
+
 	// Read the first 6 bytes to determine the compression type
 	firstBytes := make([]byte, 6)
 	count, err := input.Read(firstBytes)
@@ -129,19 +222,43 @@ func ZReader(input io.Reader) (io.Reader, error) {
 	switch {
 	case bytes.HasPrefix(firstBytes, gzipMagic):
 		log.Info("Input stream is gzip compressed")
-		return gzip.NewReader(input)
+		gzipReader, err := gzip.NewReader(input)
+		if err != nil {
+			return nil, err
+		}
+
+		return withCloser(gzipReader, closer), nil
+
 	case bytes.HasPrefix(firstBytes, zstdMagic):
 		log.Info("Input stream is zstd compressed")
-		return zstd.NewReader(input)
+		zstdReader, err := zstd.NewReader(input)
+		if err != nil {
+			return nil, err
+		}
+
+		// Not using withCloser(): it stores its closer behind the io.Closer
+		// interface, which would only promote Close() and hide interrupt().
+		return struct {
+			io.Reader
+			zstdCloser
+		}{zstdReader, newZstdCloser(zstdReader, closer)}, nil
+
 	case bytes.HasPrefix(firstBytes, bzip2Magic):
 		log.Info("Input stream is bzip2 compressed")
-		return bzip2.NewReader(input), nil
+		return withCloser(bzip2.NewReader(input), closer), nil
+
 	case bytes.HasPrefix(firstBytes, xzMagic):
 		log.Info("Input stream is xz compressed")
-		return xz.NewReader(input)
+		xzReader, err := xz.NewReader(input)
+		if err != nil {
+			return nil, err
+		}
+
+		return withCloser(xzReader, closer), nil
+
 	default:
 		// No magic numbers matched
 		log.Info("Input stream is assumed to be uncompressed")
-		return input, nil
+		return withCloser(input, closer), nil
 	}
 }

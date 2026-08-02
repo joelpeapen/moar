@@ -15,10 +15,10 @@ import (
 type tailAction int
 
 const (
-	tailActionStop tailAction = iota
-	tailActionContinue
-	tailActionReload
-	tailActionAppend
+	tailActionStop     tailAction = iota // Give up on tailing
+	tailActionContinue                   // Nothing happened, keep tailing
+	tailActionReload                     // File was rewritten, reload from the beginning
+	tailActionAppend                     // File was appended to, read the new contents
 )
 
 // reloadFromFile clears the current content and re-reads the file from scratch.
@@ -152,7 +152,7 @@ func fileShouldBeReloaded(fileName string, headerBytes []byte) bool {
 		return false
 	}
 
-	file, err := os.Open(fileName)
+	file, _, err := ZOpen(fileName)
 	if err != nil {
 		// Stat() succeeded just microseconds ago. If we can't open it now, the
 		// file was likely deleted, rotated, or permissions changed. Safest to
@@ -166,14 +166,20 @@ func fileShouldBeReloaded(fileName string, headerBytes []byte) bool {
 	}()
 
 	checkBuf := make([]byte, len(headerBytes))
-	if _, err := file.ReadAt(checkBuf, 0); err != nil {
-		// Stat() passed the old size check, but reading the boundary failed
-		// (e.g. io.EOF). This means the file was likely truncated *during* this
-		// polling cycle. Safest to reload.
-		return true
+
+	_, err = file.Read(checkBuf)
+	if bytes.Equal(checkBuf, headerBytes) {
+		return false
 	}
 
-	return !bytes.Equal(checkBuf, headerBytes)
+	// Different bytes, check for errors
+	if err != nil && err != io.EOF {
+		// Something went wrong, avoid reloading since it could break things
+		return false
+	}
+
+	// Bytes changed, no errors, so reload
+	return true
 }
 
 func determineTailAction(

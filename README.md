@@ -61,6 +61,9 @@ Moor is used as the default pager by:
 
 `MOOR`: `moor` will read extra command line options from here.
 
+`PAGER_WRAP_COLUMNS`: If set to a positive number, this limits the maximum
+width for wrapping long lines.
+
 `PAGER_LABEL`: Other programs can set this to tell moor what name to show for
 standard input.
 
@@ -470,6 +473,8 @@ terminal screen. See [its README](twin/README.md) for details.
 
 You need the [go tools](https://golang.org/doc/install).
 
+## Testing
+
 Run tests:
 
 ```bash
@@ -485,11 +490,31 @@ Launch the manual test suite:
 To run tests in 32 bit mode, either do `GOARCH=386 ./test.sh` if you're on
 Linux, or `docker build . -f Dockerfile-test-386` (tested on macOS).
 
+Both `./test.sh` and `./moor.sh` enable the race detector. Detected races end up
+in `moor-race-report.*` files in the repo root, see [RACES.md](RACES.md).
+
+## Benchmarking
+
 Run microbenchmarks:
 
 ```bash
 go test -benchmem -run='^$' -bench=. ./...
 ```
+
+Telling a real speed difference from luck takes more than one run of each. Use
+[benchstat](https://pkg.go.dev/golang.org/x/perf/cmd/benchstat), which reports
+the difference with a p-value:
+
+```bash
+go install golang.org/x/perf/cmd/benchstat@latest
+BENCH='go test -benchmem -run=^$ -bench=^BenchmarkReadLongLine$ -count=10 ./internal/reader'
+$BENCH >before.txt
+# ... make your change ...
+$BENCH >after.txt
+benchstat before.txt after.txt
+```
+
+## Profiling
 
 Profiling `BenchmarkPlainTextSearch()`. Try replacing `-alloc_objects` with
 `-alloc_space` or change the `-focus` function:
@@ -503,6 +528,8 @@ Or to get a CPU profile:
 ```bash
 go test -cpuprofile=profile.out -benchmem -run='^$' -bench '^BenchmarkRenderLines$' ./internal && go tool pprof -focus renderLines -relative_percentages -web profile.out
 ```
+
+## Building
 
 Build + run:
 

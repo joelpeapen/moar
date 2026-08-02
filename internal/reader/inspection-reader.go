@@ -20,22 +20,22 @@ func (r *inspectionReader) Read(p []byte) (n int, err error) {
 	n, err = r.base.Read(p)
 	r.bytesCount += int64(n)
 
-	if err != nil {
+	// Note that read() may return both a number of successfully read bytes
+	// *and* an error at the same time.
+
+	if n == 0 {
+		// Retain the endedWithNewline status
 		return
 	}
 
-	if n > 0 {
-		r.endedWithNewline = p[n-1] == '\n'
+	r.endedWithNewline = p[n-1] == '\n'
 
-		if len(r.headerBytes) < headerBytesCapacity {
-			wanted := n
-			if len(r.headerBytes)+wanted > headerBytesCapacity {
-				wanted = headerBytesCapacity - len(r.headerBytes)
-			}
-			r.headerBytes = append(r.headerBytes, p[:wanted]...)
+	if len(r.headerBytes) < headerBytesCapacity {
+		wanted := n
+		if len(r.headerBytes)+wanted > headerBytesCapacity {
+			wanted = headerBytesCapacity - len(r.headerBytes)
 		}
-	} else {
-		r.endedWithNewline = false
+		r.headerBytes = append(r.headerBytes, p[:wanted]...)
 	}
 
 	return

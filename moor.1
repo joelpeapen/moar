@@ -1,4 +1,4 @@
-.TH MOOR 1 2022-07-21
+.TH MOOR 1 2026-06-02
 .SH NAME
 moor \- the nice pager
 .SH SYNOPSIS
@@ -139,6 +139,10 @@ Wrap long lines, toggle with
 \fB+1234\fR
 Immediately scroll to line
 .B 1234
+.TP
+\fB+/pattern\fR
+Immediately scroll to line matching
+.B pattern
 .SH FILES
 .TP
 .B $XDG_DATA_HOME/moor/search_history
@@ -180,6 +184,10 @@ If set to "moor", many programs will use
 .B
 moor
 as their pager.
+.TP
+.B PAGER_WRAP_COLUMNS
+If set to a positive number, this limits the maximum width for wrapping
+long lines.
 .TP
 .B PAGER_LABEL
 Other programs can set this to tell moor what name to show for stdin input.

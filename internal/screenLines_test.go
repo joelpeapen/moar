@@ -463,55 +463,55 @@ func BenchmarkRenderLines(b *testing.B) {
 	}
 }
 
-// Inspired by https://github.com/walles/moor/issues/358
+// Render one screenful of a line far too long to fit on the screen.
+//
+// Inspired by https://github.com/walles/moor/issues/358, and
+// https://github.com/walles/moor/issues/412 for the searching case.
+//
+// Only a screenful can ever be displayed, so both rows should cost about the
+// same. Line length and hit count are properties of the line, not of the screen.
 func BenchmarkRenderHugeLine(b *testing.B) {
 	log.SetLevel(log.WarnLevel) // Stop info logs from polluting benchmark output
 
 	const megabytes = 5
-	builder := strings.Builder{}
-	for builder.Len() < megabytes*1024*1024 {
-		builder.WriteString("Romani ite domum. ")
+
+	testCases := []struct {
+		name string
+
+		// Repeated until the line is megabytes long
+		filler string
+
+		// Empty means no search
+		searchFor string
+	}{
+		{name: "no_search", filler: "Romani ite domum. ", searchFor: ""},
+
+		// Every position in the line is a search hit
+		{name: "many_hits", filler: strings.Repeat("a", 1024), searchFor: "a"},
 	}
-	b.SetBytes(int64(builder.Len()))
 
-	input := reader.NewFromTextForTesting(
-		"BenchmarkRenderHugeLine()",
-		builder.String())
-	pager := NewPager(input)
-	pager.screen = twin.NewFakeScreen(80, 25)
+	for _, testCase := range testCases {
+		b.Run(testCase.name, func(b *testing.B) {
+			builder := strings.Builder{}
+			for builder.Len() < megabytes*1024*1024 {
+				builder.WriteString(testCase.filler)
+			}
+			b.SetBytes(int64(builder.Len()))
 
-	assert.NilError(b, input.Wait())
+			input := reader.NewFromTextForTesting(
+				"BenchmarkRenderHugeLine()",
+				builder.String())
+			pager := NewPager(input)
+			pager.screen = twin.NewFakeScreen(80, 25)
+			pager.search = search.For(testCase.searchFor)
 
-	pager.renderLines() // Warm up
+			assert.NilError(b, input.Wait())
 
-	for b.Loop() {
-		pager.renderLines()
-	}
-}
+			pager.renderLines() // Warm up
 
-// See https://github.com/walles/moor/issues/412
-func BenchmarkRenderHugeLineWithSearch(b *testing.B) {
-	log.SetLevel(log.WarnLevel) // Stop info logs from polluting benchmark output
-
-	const megabytes = 5
-	builder := strings.Builder{}
-	for builder.Len() < megabytes*1024*1024 {
-		builder.WriteString("Romani ite domum. ")
-	}
-	b.SetBytes(int64(builder.Len()))
-
-	input := reader.NewFromTextForTesting(
-		"BenchmarkRenderHugeLineWithSearch()",
-		builder.String())
-	pager := NewPager(input)
-	pager.screen = twin.NewFakeScreen(80, 25)
-	pager.search = search.For("domum")
-
-	assert.NilError(b, input.Wait())
-
-	pager.renderLines() // Warm up
-
-	for b.Loop() {
-		pager.renderLines()
+			for b.Loop() {
+				pager.renderLines()
+			}
+		})
 	}
 }

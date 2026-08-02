@@ -392,7 +392,9 @@ func (p *Pager) scrollRightToSearchHits() bool {
 	// no more hits to the right, minHitCol will stay -1.
 	minHitCol := -1
 	for _, inputLine := range rendered.inputLines {
-		matches := p.search.GetMatchRanges(inputLine.Plain())
+		// Unbounded: we need the first hit past the screen edge, however far
+		// away that is.
+		matches := p.search.GetMatchRanges(inputLine.Plain(), 0)
 		if matches != nil {
 			runes := []rune(inputLine.Plain())
 			for _, hit := range matches.Matches {
@@ -459,7 +461,9 @@ func (p *Pager) scrollLeftToSearchHits() bool {
 	rendered := p.renderLines()
 
 	for _, inputLine := range rendered.inputLines {
-		matches := p.search.GetMatchRanges(inputLine.Plain())
+		// Unbounded even though only hits left of leftColumnZeroBased are used:
+		// a rune count bound would drop hits on lines with zero width runes.
+		matches := p.search.GetMatchRanges(inputLine.Plain(), 0)
 		if matches != nil {
 			runes := []rune(inputLine.Plain())
 			for _, hit := range matches.Matches {

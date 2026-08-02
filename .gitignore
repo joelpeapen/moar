@@ -4,3 +4,8 @@
 
 # For historical reasons, this old name had to be changed to get into Debian
 /releases/moar-*
+
+# Command and output traffic to the Windows test VM, but keep the explanation of
+# what the directory is for. See .windows-vm-io/README.md
+/.windows-vm-io/*
+!/.windows-vm-io/README.md

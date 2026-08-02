@@ -5,6 +5,7 @@ import (
 	"os"
 	"runtime/debug"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -332,6 +333,175 @@ func TestInterruptableReader_blockedOnRead(t *testing.T) {
 	n, err = testMe.Read(buffer)
 	assert.Equal(t, err, io.EOF)
 	assert.Equal(t, n, 0)
+}
+
+// An idle reader must keep re-asserting the terminal mode.
+//
+// A reset that happens while nothing is readable would otherwise never be
+// noticed: in cooked mode the kernel line buffers keystrokes, so waiting for
+// something to read before re-asserting would be waiting for input that cannot
+// arrive.
+func TestInterruptableReader_reassertsModeWhileIdle(t *testing.T) {
+	// Make a pipe to read from, and never write anything to it
+	pipeReader, _, err := os.Pipe()
+	assert.NilError(t, err)
+
+	// Make an interruptable reader that counts its terminal mode re-asserts
+	testMe := newInterruptableReader(pipeReader)
+	var reasserts atomic.Int32
+	testMe.reassert = func(*os.File) {
+		reasserts.Add(1)
+	}
+
+	// Start a thread that reads from the pipe. With nothing to read it will
+	// just keep polling.
+	readDone := make(chan struct{})
+	go func() {
+		defer func() {
+			panicHandler("TestInterruptableReader_reassertsModeWhileIdle()", recover(), debug.Stack())
+		}()
+
+		buffer := make([]byte, 1)
+		_, _ = testMe.Read(buffer)
+		close(readDone)
+	}()
+
+	// Long enough for the reader to poll a few times
+	time.Sleep(3 * interruptableReaderMaxWait)
+
+	assert.Assert(t, reasserts.Load() > 1,
+		"Idle reader should have re-asserted the terminal mode repeatedly, did it %d times",
+		reasserts.Load())
+
+	testMe.Interrupt()
+	<-readDone
+}
+
+// Resuming from a pause must re-assert the terminal mode before the reader
+// blocks on its next read.
+//
+// Whatever ran during the pause may have left the terminal in a mode of its
+// own choosing. A reader that blocks first and re-asserts afterwards can end
+// up waiting for input that the current mode will never deliver, and then the
+// re-assert never happens because the blocked read is holding the semaphore.
+func TestInterruptableReader_reassertsModeWhenResuming(t *testing.T) {
+	// Make a pipe to read from and write to
+	pipeReader, pipeWriter, err := os.Pipe()
+	assert.NilError(t, err)
+
+	// Make an interruptable reader that counts its terminal mode re-asserts
+	testMe := newInterruptableReader(pipeReader)
+	var reasserts atomic.Int32
+	testMe.reassert = func(*os.File) {
+		reasserts.Add(1)
+	}
+
+	// Give the reader something to read, so that it gets all the way to its
+	// blocking read rather than looping on "nothing available yet"
+	n, err := pipeWriter.Write([]byte{42})
+	assert.NilError(t, err)
+	assert.Equal(t, n, 1)
+
+	testMe.SetPaused(true)
+
+	// Start a thread that reads from the pipe
+	readDone := make(chan struct{})
+	go func() {
+		defer func() {
+			panicHandler("TestInterruptableReader_reassertsModeWhenResuming()", recover(), debug.Stack())
+		}()
+
+		buffer := make([]byte, 1)
+		_, _ = testMe.Read(buffer)
+		close(readDone)
+	}()
+
+	// Wait for the reader thread to reach the blocking acquire it does just
+	// before reading. That takes only as long as starting a goroutine: the pipe
+	// already has data, so the readiness check returns immediately rather than
+	// polling for interruptableReaderMaxWait.
+	//
+	// Sleeping too little would make this test pass without proving anything,
+	// since a reader still at the top of its loop re-asserts there instead.
+	// Measured: one millisecond is enough, so this is a hundredfold margin.
+	time.Sleep(100 * time.Millisecond)
+
+	// Only re-asserts made after resuming count
+	reasserts.Store(0)
+
+	testMe.SetPaused(false)
+
+	<-readDone
+
+	assert.Assert(t, reasserts.Load() > 0,
+		"Terminal mode should have been re-asserted when resuming from the pause")
+}
+
+// Pausing must always be possible, also right after a pause during which
+// somebody else consumed our input.
+//
+// A reader that got told there was something to read, and then waited out a
+// pause before acting on it, can find the input gone by the time it gets to
+// read. Committing to a blocking read at that point would park the reader with
+// the pause semaphore held, and Close() would then have to wait for a keypress
+// that nobody is going to make.
+func TestInterruptableReader_pausableWhenPauseConsumedTheInput(t *testing.T) {
+	// Make a pipe to read from and write to
+	pipeReader, pipeWriter, err := os.Pipe()
+	assert.NilError(t, err)
+
+	// Make an interruptable reader
+	testMe := newInterruptableReader(pipeReader)
+	testMe.reassert = func(*os.File) {}
+
+	// Give the reader something to read, so that it gets all the way to its
+	// blocking acquire rather than looping on "nothing available yet"
+	n, err := pipeWriter.Write([]byte{42})
+	assert.NilError(t, err)
+	assert.Equal(t, n, 1)
+
+	testMe.SetPaused(true)
+
+	// Start a thread that reads from the pipe
+	go func() {
+		defer func() {
+			panicHandler("TestInterruptableReader_pausableWhenPauseConsumedTheInput()", recover(), debug.Stack())
+		}()
+
+		buffer := make([]byte, 1)
+		_, _ = testMe.Read(buffer)
+	}()
+
+	// Wait for the reader thread to reach the blocking acquire it does just
+	// before reading. Same reasoning and margin as in
+	// TestInterruptableReader_reassertsModeWhenResuming().
+	time.Sleep(100 * time.Millisecond)
+
+	// This is the paused-in code eating the keystroke the reader was told about
+	buffer := make([]byte, 1)
+	n, err = pipeReader.Read(buffer)
+	assert.NilError(t, err)
+	assert.Equal(t, n, 1)
+
+	testMe.SetPaused(false)
+
+	// This is what Close() does
+	testMe.Interrupt()
+	pausedAgain := make(chan struct{})
+	go func() {
+		defer func() {
+			panicHandler("TestInterruptableReader_pausableWhenPauseConsumedTheInput()", recover(), debug.Stack())
+		}()
+
+		testMe.SetPaused(true)
+		close(pausedAgain)
+	}()
+
+	select {
+	case <-pausedAgain:
+	case <-time.After(2 * time.Second):
+		t.Fatal("Pausing should not have to wait for input that nobody is going to type")
+	}
 }
 
 func TestInterruptableReader_interruptFirstReadLater(t *testing.T) {

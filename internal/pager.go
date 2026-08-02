@@ -98,6 +98,9 @@ type Pager struct {
 	// Ref: https://github.com/walles/moor/issues/113
 	QuitIfOneScreen bool
 
+	// Search for this string on startup, ignored if empty
+	InitialSearch string
+
 	// Ref: https://github.com/walles/moor/issues/94
 	ScrollLeftHint  textstyles.CellWithMetadata
 	ScrollRightHint textstyles.CellWithMetadata
@@ -135,6 +138,9 @@ type Pager struct {
 	//
 	// Ref: https://github.com/walles/moor/issues/175
 	bookmarks map[rune]scrollPosition
+
+	// Maximum width instead of reported screen width
+	Width int
 }
 
 type _PreHelpState struct {
@@ -241,6 +247,7 @@ func NewPager(readers ...*reader.ReaderImpl) *Pager {
 		ScrollRightHint:             textstyles.CellWithMetadata{Rune: '>', Style: twin.StyleDefault.WithAttr(twin.AttrReverse)},
 		scrollPosition:              newScrollPosition(name),
 		WithSearchHitLineBackground: true,
+		Width:                       0,
 	}
 
 	pager.mode = PagerModeViewing{pager: &pager}
@@ -547,6 +554,15 @@ func (p *Pager) StartPaging(screen twin.Screen, chromaStyle *chroma.Style, chrom
 
 	// Make sure the reader knows how many lines we want
 	p.setTargetLine(p.TargetLine)
+
+	if p.InitialSearch != "" {
+		// Trigger the initial search as if the user pressed "/", typed a query and pressed Enter
+
+		p.search.For(p.InitialSearch)
+		p.searchHistory.addEntry(p.InitialSearch)
+
+		p.scrollToSearchHits()
+	}
 
 	go func() {
 		defer func() {

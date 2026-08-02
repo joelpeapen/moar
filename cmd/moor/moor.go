@@ -6,10 +6,12 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"os/signal"
 	"runtime"
 	"runtime/debug"
 	"strconv"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/alecthomas/chroma/v2"
@@ -54,11 +56,15 @@ func printProblemsHeader() {
 	fmt.Fprintln(os.Stderr, "Please post the following report at <https://github.com/walles/moor/issues>,")
 	fmt.Fprintln(os.Stderr, "or e-mail it to johan.walles@gmail.com.")
 	fmt.Fprintln(os.Stderr)
-	fmt.Fprintln(os.Stderr, "Version      :", getVersion())
-	fmt.Fprintln(os.Stderr, "LANG         :", os.Getenv("LANG"))
-	fmt.Fprintln(os.Stderr, "TERM         :", os.Getenv("TERM"))
-	fmt.Fprintln(os.Stderr, "EDITOR       :", os.Getenv("EDITOR"))
-	fmt.Fprintln(os.Stderr, "TERM_PROGRAM :", os.Getenv("TERM_PROGRAM"))
+	fmt.Fprintln(os.Stderr, "Version       :", getVersion())
+	fmt.Fprintln(os.Stderr, "LANG          :", os.Getenv("LANG"))
+	fmt.Fprintln(os.Stderr, "TERM          :", os.Getenv("TERM"))
+	fmt.Fprintln(os.Stderr, "EDITOR        :", os.Getenv("EDITOR"))
+	fmt.Fprintln(os.Stderr, "TERM_PROGRAM  :", os.Getenv("TERM_PROGRAM"))
+	if value := os.Getenv("PAGER_WRAP_COLUMNS"); value != "" {
+		fmt.Fprintln(os.Stderr, "PAGER_WRAP_COLUMNS :", value)
+	}
+
 	fmt.Fprintln(os.Stderr)
 
 	lessenv_section := ""
@@ -271,46 +277,6 @@ func pumpToStdout(inputFilenames ...string) error {
 	return nil
 }
 
-// Parses an argument like "+123" anywhere on the command line into a one-based
-// line number, and returns the remaining args.
-//
-// Returns nil on no target line number specified.
-func getTargetLine(args []string) (*linemetadata.Index, []string) {
-	for i, arg := range args {
-		if !strings.HasPrefix(arg, "+") {
-			continue
-		}
-
-		lineNumber, err := strconv.ParseInt(arg[1:], 10, 32)
-		if err != nil {
-			// Let's pretend this is a file name
-			continue
-		}
-		if lineNumber < 0 {
-			// Pretend this is a file name
-			continue
-		}
-
-		// Remove the target line number from the args
-		//
-		// Ref: https://stackoverflow.com/a/57213476/473672
-		remainingArgs := make([]string, 0)
-		remainingArgs = append(remainingArgs, args[:i]...)
-		remainingArgs = append(remainingArgs, args[i+1:]...)
-
-		if lineNumber == 0 {
-			// Ignore +0 because that's what less does:
-			// https://github.com/walles/moor/issues/316
-			return nil, remainingArgs
-		}
-
-		returnMe := linemetadata.IndexFromOneBased(int(lineNumber))
-		return &returnMe, remainingArgs
-	}
-
-	return nil, args
-}
-
 func russiaNotSupported() {
 	if !strings.HasPrefix(strings.ToLower(os.Getenv("LANG")), "ru_ru") {
 		// Not russia
@@ -463,7 +429,7 @@ func pagerFromArgs(
 		flags = append(strings.Fields(moorEnv), flags...)
 	}
 
-	targetLine, remainingArgs := getTargetLine(flags)
+	targetLine, initialSearch, remainingArgs := parsePlusArgs(flags)
 
 	err = flagSet.Parse(remainingArgs)
 
@@ -652,6 +618,14 @@ func pagerFromArgs(
 	pager.TabSize = int(*tabSize)
 	pager.WithSearchHitLineBackground = !*noSearchLineHighlight
 
+	if value, err := strconv.Atoi(os.Getenv("PAGER_WRAP_COLUMNS")); err == nil {
+		pager.Width = value
+	}
+
+	if initialSearch != nil {
+		pager.InitialSearch = *initialSearch
+	}
+
 	pager.TargetLine = targetLine
 	if *follow && pager.TargetLine == nil {
 		reallyHigh := linemetadata.IndexMax()
@@ -737,6 +711,28 @@ func flagSetFunc[T any](flagSet *flag.FlagSet, name string, defaultValue T, usag
 }
 
 func startPaging(pager *internal.Pager, screen twin.Screen, chromaStyle *chroma.Style, chromaFormatter *chroma.Formatter) {
+	// Handle SIGINT and SIGTERM
+	signals := make(chan os.Signal, 1)
+	signal.Notify(signals, syscall.SIGINT, syscall.SIGTERM)
+	go func() {
+		defer func() {
+			internal.PanicHandler("startPaging()/signals", recover(), debug.Stack())
+		}()
+
+		sig := <-signals
+		log.Infof("Got signal %v, exiting...", sig)
+		screen.Close()
+
+		exitCode := 1
+		syscallSignal, ok := sig.(syscall.Signal)
+		if ok {
+			// Ref: https://hypothesis.sh/references/exit-codes?grp=signal
+			exitCode = 128 + int(syscallSignal)
+		}
+
+		os.Exit(exitCode)
+	}()
+
 	defer func() {
 		panicMessage := recover()
 		if panicMessage != nil {

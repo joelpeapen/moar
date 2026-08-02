@@ -365,7 +365,7 @@ func TestRawUpdateStyleResetDoesNotAffectHyperlink(t *testing.T) {
 
 // Ref: https://github.com/walles/moor/issues/372
 func TestIssue372(t *testing.T) {
-	const maxTokensCount = 10
+	const maxCellsCount = 10
 
 	// Load test data once
 	data, err := os.ReadFile(path.Join(samplesDir, "issue-372.txt"))
@@ -376,8 +376,140 @@ func TestIssue372(t *testing.T) {
 	assert.Equal(t, 2, len(lines))
 	assert.Equal(t, 0, len(lines[1]))
 
-	styled := StyledRunesFromString(twin.StyleDefault, lines[0], nil, maxTokensCount).StyledRunes
-	assert.Equal(t, len(styled), maxTokensCount)
+	styled := StyledRunesFromString(twin.StyleDefault, lines[0], nil, maxCellsCount).StyledRunes
+	assert.Equal(t, len(styled), maxCellsCount)
+}
+
+// The cells count budget is in cells, not in input runes. Man page backspace
+// formatting puts several input runes into one cell, so a line mixing that with
+// ANSI escape sequences must still deliver the full requested number of cells.
+//
+// The escape sequence matters: the budget is only consulted at part boundaries,
+// and a line with no escapes at all takes a plain text shortcut.
+func TestManPageFormattingDeliversRequestedCellsCount(t *testing.T) {
+	const requestedCellsCount = 10
+
+	// Nine cells worth of man page formatting, each cell made from more than one
+	// input rune
+	prefixes := map[string]string{
+		// Five runes per cell: '_', backspace, 𝕏, backspace, 𝕏
+		"bold underline": strings.Repeat("_\b\U0001D54F\b\U0001D54F", 9),
+
+		// Seven runes per cell: '+', backspace, '+', backspace, 'o', backspace, 'o'
+		"bullet": strings.Repeat("+\b+\bo\bo", 9),
+	}
+
+	for name, prefix := range prefixes {
+		t.Run(name, func(t *testing.T) {
+			line := prefix + "\x1b[31m" + strings.Repeat("x", 5000)
+
+			styled := StyledRunesFromString(twin.StyleDefault, line, nil, requestedCellsCount).StyledRunes
+			assert.Equal(t, len(styled), requestedCellsCount)
+		})
+	}
+}
+
+// A TAB is one input rune rendering as up to TabSize cells, so tab expansion
+// must stop once the cells limit is reached. The final TAB is rendered up to its
+// tab stop rather than cut in half, so the result can overshoot by up to
+// TabSize-1 cells. What it must not do is scale with the length of the line.
+func TestTabExpansionRespectsCellsLimit(t *testing.T) {
+	const requestedCellsCount = 10
+
+	// Far more tabs than the limit leaves room for
+	line := strings.Repeat("\t", 500)
+
+	styled := StyledRunesFromString(twin.StyleDefault, line, nil, requestedCellsCount).StyledRunes
+
+	assert.Assert(t, len(styled) >= requestedCellsCount,
+		"got %d cells, want at least the %d requested", len(styled), requestedCellsCount)
+	assert.Assert(t, len(styled) < requestedCellsCount+TabSize,
+		"got %d cells, want fewer than %d", len(styled), requestedCellsCount+TabSize)
+}
+
+// Cutting a render short at the cells limit must not change the cells we do
+// deliver: a limited render is a prefix of an unlimited one, also when the
+// escape sequences sit beyond the bytes we scan for them.
+func TestCellsLimitOnlyTruncates(t *testing.T) {
+	// The prefixes below are one cell short of this, so they probe all but one
+	// percent of the byte budget. Enough that a maxBytesPerCell one single byte
+	// too small still fails this test.
+	const requestedCellsCount = 100
+
+	// Each prefix renders as requestedCellsCount-1 cells, so the escape sequence
+	// right after it still lands inside the requested range
+	prefixes := map[string]string{
+		"plain": strings.Repeat("x", requestedCellsCount-1),
+
+		// The densest cell there is, eleven bytes: see maxBytesPerCell
+		"bold underline": strings.Repeat("_\b\U0001D54F\b\U0001D54F", requestedCellsCount-1),
+	}
+
+	for name, prefix := range prefixes {
+		t.Run(name, func(t *testing.T) {
+			// Something red after the prefix, then twice the escape sequence scan
+			// window worth of text, so that the scan really does get cut short
+			line := prefix + "\x1b[31m" + strings.Repeat("y", 2*requestedCellsCount*maxBytesPerCell)
+
+			unlimited := StyledRunesFromString(twin.StyleDefault, line, nil, 0).StyledRunes
+			limited := StyledRunesFromString(twin.StyleDefault, line, nil, requestedCellsCount).StyledRunes
+
+			assert.Equal(t, len(limited), requestedCellsCount)
+			assert.DeepEqual(t,
+				limited,
+				unlimited[:requestedCellsCount],
+				cmp.AllowUnexported(twin.Style{}))
+		})
+	}
+}
+
+// Escape sequences cost input bytes but render no cells, so a line can carry
+// arbitrarily many of them before its first visible cell. The cells limit must
+// still deliver the cells that are there.
+func TestCellsLimitCountsCellsNotEscapeBytes(t *testing.T) {
+	const requestedCellsCount = 4
+
+	// Red on, red off, over and over. Renders nothing, while taking up many times
+	// the requested cells' worth of input bytes.
+	noopEscapes := strings.Repeat("\x1b[31m\x1b[m", requestedCellsCount*maxBytesPerCell)
+	line := noopEscapes + "\x1b[1m" + strings.Repeat("x", requestedCellsCount)
+
+	styled := StyledRunesFromString(twin.StyleDefault, line, nil, requestedCellsCount).StyledRunes
+
+	assert.Equal(t, len(styled), requestedCellsCount)
+	for _, cell := range styled {
+		assert.Equal(t, cell.Rune, 'x')
+		assert.Equal(t, cell.Style, twin.StyleDefault.WithAttr(twin.AttrBold))
+	}
+}
+
+// Man pages are pre-formatted to the terminal width, so their overstrike
+// formatting always sits near the start of a line. Detection only scans that
+// far, which keeps it cheap on lines that are not man page formatting at all.
+//
+// Measured over 14801 man pages from /usr/share/man and Homebrew, at MANWIDTH
+// 80 and 400: the first overstrike is at most 203 bytes into its line, and at
+// most 654 bytes into the page.
+func TestHasManPageFormattingOnlyScansLineStart(t *testing.T) {
+	// Comfortably past any scan window, so this fails for an unlimited scan.
+	const farAway = 1024 * 1024
+
+	overstrike := "b\x08bo\x08ol\x08ld\x08d"
+
+	t.Run("near the start is detected", func(t *testing.T) {
+		// 654 bytes is the deepest any surveyed man page needed
+		line := strings.Repeat("x", 654) + overstrike
+		assert.Assert(t, HasManPageFormatting(line))
+	})
+
+	t.Run("far into the line is not detected", func(t *testing.T) {
+		line := strings.Repeat("x", farAway) + overstrike
+		assert.Assert(t, !HasManPageFormatting(line))
+	})
+
+	t.Run("unformatted long line is not detected", func(t *testing.T) {
+		assert.Assert(t, !HasManPageFormatting(strings.Repeat("x", farAway)))
+	})
 }
 
 // Benchmark stripping formatting from a colored git diff sample.
@@ -394,8 +526,8 @@ func BenchmarkStripFormatting(b *testing.B) {
 	lines := strings.Split(string(data), "\n")
 	// Set processed bytes per iteration
 	b.SetBytes(int64(len(data)))
-	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
+
+	for b.Loop() {
 		for _, line := range lines {
 			// We ignore the output; benchmarking execution time only
 			_ = StripFormatting(line, linemetadata.Index{})
@@ -416,8 +548,8 @@ func BenchmarkStripFormattingUnformattedInput(b *testing.B) {
 
 	// Remove formatting before benchmarking
 	var unformatted strings.Builder
-	formattedLines := strings.Split(string(data), "\n")
-	for _, line := range formattedLines {
+	formattedLines := strings.SplitSeq(string(data), "\n")
+	for line := range formattedLines {
 		unformatted.WriteString(StripFormatting(line, linemetadata.Index{}))
 		unformatted.WriteString("\n")
 	}
@@ -425,11 +557,25 @@ func BenchmarkStripFormattingUnformattedInput(b *testing.B) {
 	lines := strings.Split(unformatted.String(), "\n")
 	// Set processed bytes per iteration
 	b.SetBytes(int64(len(unformatted.String())))
-	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
+
+	for b.Loop() {
 		for _, line := range lines {
 			// We ignore the output; benchmarking execution time only
 			_ = StripFormatting(line, linemetadata.Index{})
 		}
+	}
+}
+
+// A huge line starting with an escape sequence. Lines with no escape sequences
+// have a shortcut in styledStringsFromString(); this benchmark measures what
+// happens when we can't take it.
+func BenchmarkStyledRunesFromHugeAnsiLine(b *testing.B) {
+	line := "\x1b[31m" + strings.Repeat("x", 5*1024*1024)
+	b.SetBytes(int64(len(line)))
+
+	for b.Loop() {
+		// 81 is what an 80 column terminal asks for, see HighlightedTokens()
+		// callers
+		StyledRunesFromString(twin.StyleDefault, line, nil, 81)
 	}
 }
