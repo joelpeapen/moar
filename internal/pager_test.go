@@ -160,6 +160,35 @@ func startPagingWithTerminalFg(t *testing.T, reader *reader.ReaderImpl, withTerm
 	return screen
 }
 
+// ReprintAfterExit() renders the contents it prints, so settings changed after
+// the last redraw are reflected in its output. --quit-if-one-screen relies on
+// this for turning line numbers off on its way out.
+func TestReprintAfterExitUsesCurrentSettings(t *testing.T) {
+	reader := reader.NewFromTextForTesting("", "hello")
+	assert.NilError(t, reader.Wait())
+
+	screen := twin.NewFakeScreen(20, 10)
+	pager := NewPager(reader)
+	pager.ShowLineNumbers = true
+
+	// Tell our Pager to quit immediately
+	pager.Quit()
+
+	// Except for just quitting, this also associates our FakeScreen with the
+	// Pager
+	pager.StartPaging(screen, nil, nil)
+
+	// This is the frame the main loop would have left behind
+	pager.redraw("")
+	assert.Equal(t, "  1 hello", rowToString(screen.GetRow(0)))
+
+	// Turn line numbers off the way --quit-if-one-screen does on its way out
+	pager.showLineNumbers = false
+	pager.ReprintAfterExit()
+
+	assert.Equal(t, "hello", rowToString(screen.GetRow(0)))
+}
+
 // assertIndexOfFirstX verifies the (zero-based) index of the first 'x'
 func assertIndexOfFirstX(t *testing.T, tabSize int, s string, expectedIndex int) {
 	reader := reader.NewFromTextForTesting("", s)
