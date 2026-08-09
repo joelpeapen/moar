@@ -92,7 +92,10 @@ One branch per step, each merged into master separately.
       own: nothing in the repo can currently assert on escape sequences at all.
       Also the measurement tool for steps 1 and 5.
       Branch: `pty-test-harness`. Went with `creack/pty`, see the test notes
-      below.
+      below. What landed captures bytes, not timestamps, so it can tell you
+      *whether* `ESC[?1049h` was written but not for how long the alternate
+      screen was up. The numbers in the table above still come from throwaway
+      measuring code.
 
 - [ ] **4. Make enter/leave alt screen idempotent, defer the enter to the first
       `Show()`.**
@@ -170,6 +173,18 @@ still flash. Unavoidable without waiting longer before showing anything.
   tagged `!windows`. `test.sh`'s cross compilation step doesn't build test
   files, but `.github/workflows/windows-ci.yml` runs `go test ./...` on a real
   Windows machine, so the tag is load bearing.
-- Wait for painted contents, not for `ESC[?1049h`. Moor enters the alternate
-  screen before its first redraw, so a `q` sent on seeing `ESC[?1049h` can get
-  handled before anything is drawn, and the test then measures nothing.
+- Wait for painted contents, never for a mode setting escape sequence. Today
+  moor enters the alternate screen before its first redraw, so a `q` sent on
+  seeing `ESC[?1049h` gets handled before anything is drawn and the test then
+  measures nothing. Step 4 moves that enter, but the advice stands: mode
+  settings say nothing about what is on screen.
+- The harness gives moor a file to page. `pty.StartWithSize()` wires stdin,
+  stdout and stderr to the same pty, so there is no way to pipe input in, and
+  `stdinIsRedirected` is always false. Step 5's grace deadline only has a job to
+  do for streams, and `git branch | moor` is the case issue #425 is about, so
+  that step likely needs `startMoor()` reshaped around `pty.Open()` plus an
+  explicit `SysProcAttr{Setsid: true, Setctty: true}`.
+- Step 5's failing test ("must never emit `ESC[?1049h`") belongs next to the
+  other two in `cmd/moor/alt-screen_test.go`. Once it exists,
+  `TestQuitIfOneScreenPrintsOnNormalScreen` no longer guards anything about the
+  alternate screen, only that the contents get printed.
