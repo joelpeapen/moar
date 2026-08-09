@@ -49,9 +49,7 @@ func (p *Pager) redraw(spinner string) {
 // Render the whole pager display into the screen's cells, both contents lines
 // and the status line at the bottom.
 //
-// Nothing reaches the terminal until somebody Show()s the screen. Use this
-// rather than redraw() when the cells are wanted but painting the terminal
-// isn't, for example just before exiting.
+// Nothing reaches the terminal until somebody Show()s the screen.
 //
 // Returns the number of screen lines the contents ended up on, not counting the
 // status line below them.
