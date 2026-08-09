@@ -6,6 +6,7 @@ require (
 	github.com/adrg/xdg v0.5.3
 	github.com/alecthomas/chroma/v2 v2.22.0
 	github.com/charlievieth/strcase v0.0.6
+	github.com/creack/pty v1.1.24
 	github.com/davecgh/go-spew v1.1.1
 	github.com/go-enry/go-enry/v2 v2.9.6
 	github.com/google/go-cmp v0.7.0
