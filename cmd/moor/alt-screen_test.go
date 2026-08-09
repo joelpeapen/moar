@@ -23,10 +23,13 @@ func TestLongFileUsesAlternateScreen(t *testing.T) {
 	session.wait(t)
 
 	captured := session.captured()
-	assert.Assert(t, strings.Contains(captured, altScreenEnter),
+	enteredAt := strings.Index(captured, altScreenEnter)
+	assert.Assert(t, enteredAt >= 0,
 		"Never entered the alternate screen:\n%s", humanizeEscapes(captured))
-	assert.Assert(t, strings.Contains(captured, altScreenLeave),
-		"Never left the alternate screen:\n%s", humanizeEscapes(captured))
+
+	leftAt := strings.LastIndex(captured, altScreenLeave)
+	assert.Assert(t, leftAt > enteredAt,
+		"Never left the alternate screen after entering it:\n%s", humanizeEscapes(captured))
 }
 
 // With --quit-if-one-screen, what moor leaves behind ends up on the user's

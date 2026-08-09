@@ -63,9 +63,14 @@ func TestMain(m *testing.M) {
 var moorBinary = sync.OnceValues(func() (string, error) {
 	binary := filepath.Join(moorBinaryDir, "moor")
 
+	// -trimpath is what build.sh uses, and it changes the build ID of every
+	// package, so without it we'd compile all of moor's dependencies a second
+	// time. test.sh runs build.sh before the tests, so with it this is just a
+	// link. Skipping build.sh's -ldflags is fine, those only affect the link.
+	//
 	// Relies on go test running us with the package directory as our working
-	// directory
-	build := exec.Command("go", "build", "-o", binary, ".")
+	// directory.
+	build := exec.Command("go", "build", "-trimpath", "-o", binary, ".")
 	problems := strings.Builder{}
 	build.Stderr = &problems
 	if err := build.Run(); err != nil {
@@ -84,10 +89,11 @@ type ptySession struct {
 	// Closed once moor is gone and all of its output has been captured
 	exited chan struct{}
 
-	// Protects output and answerBackgroundQuery, both of which the capture()
-	// goroutine writes to
-	lock                  sync.Mutex
-	output                bytes.Buffer
+	// Protects output, which the capture() goroutine writes to
+	lock   sync.Mutex
+	output bytes.Buffer
+
+	// After startMoor() returns, only the capture() goroutine touches this
 	answerBackgroundQuery bool
 }
 
@@ -141,6 +147,9 @@ func startMoor(t *testing.T, answerBackgroundQuery bool, args ...string) *ptySes
 		case <-time.After(ptyTimeout):
 		}
 
+		// Reap moor, in case this test never called wait(). Harmless if it did.
+		_ = cmd.Wait()
+
 		_ = master.Close()
 	})
 
@@ -163,13 +172,11 @@ func (s *ptySession) capture() {
 		if count > 0 {
 			s.lock.Lock()
 			s.output.Write(buffer[:count])
-			answerNow := s.answerBackgroundQuery && bytes.Contains(s.output.Bytes(), []byte(backgroundQuery))
-			if answerNow {
-				s.answerBackgroundQuery = false
-			}
+			sawQuery := bytes.Contains(s.output.Bytes(), []byte(backgroundQuery))
 			s.lock.Unlock()
 
-			if answerNow {
+			if s.answerBackgroundQuery && sawQuery {
+				s.answerBackgroundQuery = false
 				_, _ = s.master.Write([]byte(backgroundAnswer))
 			}
 		}
@@ -188,25 +195,42 @@ func (s *ptySession) captured() string {
 	return s.output.String()
 }
 
-// Blocks until moor has written needle, and fails the test if it doesn't.
+// Blocks until moor has written needle, and fails the test if moor exits or
+// times out without doing so.
 //
-// Wait for painted contents rather than for a mode setting escape sequence:
-// moor enters the alternate screen before its first redraw, so keys sent at
-// that point can get handled before anything has been drawn.
+// Wait for painted contents rather than for a mode setting escape sequence.
+// Mode settings can happen before moor has drawn anything, and then keys sent
+// on seeing one get handled before there is anything on screen to act on.
 func (s *ptySession) waitFor(t *testing.T, needle string) {
 	t.Helper()
 
 	deadline := time.Now().Add(ptyTimeout)
-	for time.Now().Before(deadline) {
+	for {
+		// Check this before looking at the output, so that the last look
+		// happens after the last of that output was captured
+		moorIsGone := false
+		select {
+		case <-s.exited:
+			moorIsGone = true
+		default:
+		}
+
 		if strings.Contains(s.captured(), needle) {
 			return
 		}
 
+		if moorIsGone {
+			t.Fatalf("Moor exited without writing %s, it wrote:\n%s",
+				humanizeEscapes(needle), humanizeEscapes(s.captured()))
+		}
+
+		if time.Now().After(deadline) {
+			t.Fatalf("Timed out waiting for %s, moor wrote:\n%s",
+				humanizeEscapes(needle), humanizeEscapes(s.captured()))
+		}
+
 		time.Sleep(time.Millisecond)
 	}
-
-	t.Fatalf("Timed out waiting for %s, moor wrote:\n%s",
-		humanizeEscapes(needle), humanizeEscapes(s.captured()))
 }
 
 // Sends keypresses to moor.
@@ -256,7 +280,7 @@ func humanizeEscapes(s string) string {
 			continue
 		}
 
-		if char == '\n' || char >= ' ' {
+		if char == '\n' || (char >= ' ' && char != 0x7f) {
 			humanized.WriteRune(char)
 			continue
 		}
