@@ -667,6 +667,13 @@ func (p *Pager) StartPaging(screen twin.Screen, chromaStyle *chroma.Style, chrom
 			// that's what less does.
 			if len(p.readers) == 1 && p.QuitIfOneScreen && !p.isShowingHelp && r.ReadingDone.Load() && r.HighlightingDone.Load() {
 				if p.fitsOnOneScreen() {
+					// Leave the contents on the user's own screen, looking
+					// like cat printed them rather than like a pager did.
+					// DeInit false is what makes our caller call
+					// ReprintAfterExit(), and ReprintAfterExit() renders
+					// after we're done here, so it will pick up the line
+					// numbers setting.
+					//
 					// Ref:
 					// https://github.com/walles/moor/issues/113#issuecomment-1368294132
 					p.showLineNumbers = false
