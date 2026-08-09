@@ -674,7 +674,9 @@ func (p *Pager) StartPaging(screen twin.Screen, chromaStyle *chroma.Style, chrom
 					p.quit = true
 
 					// Without this the line numbers setting ^ won't take effect
-					p.redraw(spinner)
+					// in ReprintAfterExit(). No need to Show() what we render
+					// here, we are on our way out.
+					p.renderIntoCells(spinner)
 
 					log.Info("Exiting because of --quit-if-one-screen, everything fit on one screen and we're done")
 
