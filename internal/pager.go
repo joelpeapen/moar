@@ -667,17 +667,22 @@ func (p *Pager) StartPaging(screen twin.Screen, chromaStyle *chroma.Style, chrom
 			// that's what less does.
 			if len(p.readers) == 1 && p.QuitIfOneScreen && !p.isShowingHelp && r.ReadingDone.Load() && r.HighlightingDone.Load() {
 				if p.fitsOnOneScreen() {
+					// Leave the contents on the user's own screen, looking
+					// like cat printed them rather than like a pager did.
+					// DeInit false is what makes our caller call
+					// ReprintAfterExit(), and ReprintAfterExit() renders
+					// after we're done here, so it will pick up the line
+					// numbers setting.
+					//
 					// Ref:
 					// https://github.com/walles/moor/issues/113#issuecomment-1368294132
-					p.showLineNumbers = false // Requires a redraw to take effect, see below
+					p.showLineNumbers = false
 					p.DeInit = false
 					p.quit = true
 
-					// Without this the line numbers setting ^ won't take effect
-					p.redraw(spinner)
-
 					log.Info("Exiting because of --quit-if-one-screen, everything fit on one screen and we're done")
 
+					// Exit the main loop
 					break
 				}
 			}
@@ -827,9 +832,8 @@ func (p *Pager) fitsOnOneScreen() bool {
 // call this method to print the pager contents to screen again, faking
 // "leaving" pager contents on screen after exit.
 func (p *Pager) ReprintAfterExit() {
-	// Figure out how many screen lines are used by pager contents
-	renderedScreen := p.renderLines()
-	screenLinesCount := len(renderedScreen.lines)
+	// Render into the cells that ShowNLines() below prints from
+	screenLinesCount := p.renderIntoCells("")
 
 	_, screenHeight := p.screen.Size()
 	screenHeightWithoutFooter := screenHeight - p.DeInitFalseMargin

@@ -40,9 +40,21 @@ type renderedScreen struct {
 }
 
 // Refresh the whole pager display, both contents lines and the status line at
-// the bottom
+// the bottom, and show the result on the terminal
 func (p *Pager) redraw(spinner string) {
-	log.Trace("redraw called")
+	p.renderIntoCells(spinner)
+	p.screen.Show()
+}
+
+// Render the whole pager display into the screen's cells, both contents lines
+// and the status line at the bottom.
+//
+// Nothing reaches the terminal until somebody Show()s the screen.
+//
+// Returns the number of screen lines the contents ended up on, not counting the
+// status line below them.
+func (p *Pager) renderIntoCells(spinner string) int {
+	log.Trace("renderIntoCells called")
 	p.screen.Clear()
 	p.longestLineLength = 0
 
@@ -71,7 +83,7 @@ func (p *Pager) redraw(spinner string) {
 
 	p.mode.drawFooter(renderedScreen.filenameText, renderedScreen.statusText, spinner)
 
-	p.screen.Show()
+	return len(renderedScreen.lines)
 }
 
 // Render all lines that should go on the screen.

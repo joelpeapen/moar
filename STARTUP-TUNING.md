@@ -74,12 +74,17 @@ One branch per step, each merged into master separately.
       Note that the blink is still clearly visible by eye, so the remaining
       steps are still needed.
 
-- [ ] **2. Split `redraw()` into render-cells and `Show()`.**
+- [x] **2. Split `redraw()` into render-cells and `Show()`.**
       Use the cells-only variant for the pre-exit redraw at
       `internal/pager.go:677`. Value on its own: removes a whole screen frame
       that is currently written to the terminal and then thrown away on every
       quit-if-one-screen exit. Prerequisite for step 5, otherwise that final
       redraw re-triggers the alt screen switch.
+      Branch: `split-redraw`. Ended up going further: `ReprintAfterExit()` now
+      renders the cells it prints from, so there is no render at all left on
+      the way out of the main loop. That also removed a latent bug where a
+      window resize between the last redraw and the reprint would blank the
+      reprinted lines.
 
 - [ ] **3. A pty test harness, characterizing current behavior.**
       Land it with passing assertions: a long file does emit `ESC[?1049h`, and
@@ -116,6 +121,27 @@ One branch per step, each merged into master separately.
       emit `ESC[?1049h`.
 
 Ordering constraint: step 5 depends on steps 2 and 4.
+
+## Deferred
+
+Found while working on the above, unrelated to the blink. Not scheduled, and
+not a reason to keep this file around.
+
+- **`pkg/moor` leaves the terminal wrecked if paging panics.**
+  `pageFromReader()` (`pkg/moor/embed-api.go`) calls `screen.Close()`
+  undeferred and with no `recover()`, so a panic in `StartPaging()` leaves the
+  embedding process on the alternate screen in raw mode. `cmd/moor/moor.go`
+  gets this right, in a deferred function that closes the screen, re-panics if
+  there was a panic, and reprints otherwise. Note that the fix is not a plain
+  `defer screen.Close()`: `ReprintAfterExit()` has to run after the close, so
+  it takes the same shape as the one in `moor.go`. Don't end up with two
+  `Close()` calls, it is not written to be idempotent.
+
+- **`--quit-if-one-screen` can drop the last line when `DeInitFalseMargin` is
+  0.** `fitsOnOneScreen()` accepts `GetLineCount() == screenHeight` while
+  `renderLines()` caps at `screenHeight - 1`. Reachable with
+  `--no-clear-on-exit-margin 0`, and quietly through `pkg/moor`, which sets
+  `QuitIfOneScreen` but never `DeInitFalseMargin`.
 
 ## Known residue after all of this
 
