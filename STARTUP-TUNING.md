@@ -86,11 +86,13 @@ One branch per step, each merged into master separately.
       window resize between the last redraw and the reprint would blank the
       reprinted lines.
 
-- [ ] **3. A pty test harness, characterizing current behavior.**
+- [x] **3. A pty test harness, characterizing current behavior.**
       Land it with passing assertions: a long file does emit `ESC[?1049h`, and
       quit-if-one-screen output still lands on the normal screen. Value on its
       own: nothing in the repo can currently assert on escape sequences at all.
       Also the measurement tool for steps 1 and 5.
+      Branch: `pty-test-harness`. Went with `creack/pty`, see the test notes
+      below.
 
 - [ ] **4. Make enter/leave alt screen idempotent, defer the enter to the first
       `Show()`.**
@@ -159,5 +161,15 @@ still flash. Unavoidable without waiting longer before showing anything.
   needs a no-op there.
 - `cmd/moor/moor_test.go` injects a fake `newScreen` into `pagerFromArgs`,
   which is the hook for testing startup reordering.
-- There is no pty dependency in `go.mod`. Step 3 decides between adding
-  `creack/pty` for a Go test and driving a small pty helper from `test.sh`.
+- `cmd/moor/pty-harness_test.go` runs moor on a pseudo terminal and captures
+  everything it writes, escape sequences included. `startMoor()` takes an
+  `answerBackgroundQuery` flag, which is the difference between the two rows in
+  the table at the top of this file. Both assertions of step 3 live in
+  `cmd/moor/alt-screen_test.go`.
+- Uses `creack/pty`, which has no ConPTY support, so both files are build
+  tagged `!windows`. `test.sh`'s cross compilation step doesn't build test
+  files, but `.github/workflows/windows-ci.yml` runs `go test ./...` on a real
+  Windows machine, so the tag is load bearing.
+- Wait for painted contents, not for `ESC[?1049h`. Moor enters the alternate
+  screen before its first redraw, so a `q` sent on seeing `ESC[?1049h` can get
+  handled before anything is drawn, and the test then measures nothing.
