@@ -173,8 +173,6 @@ func NewScreenWithMouseModeAndColorCount(mouseMode MouseMode, terminalColorCount
 	}
 	screen.ttyInReader = newInterruptableReader(screen.ttyIn)
 
-	screen.enterAlternateScreenSession()
-
 	go func() {
 		defer func() {
 			panicHandler("NewScreenWithMouseModeAndColorCount()/mainLoop()", recover(), debug.Stack())
@@ -188,11 +186,23 @@ func NewScreenWithMouseModeAndColorCount(mouseMode MouseMode, terminalColorCount
 	//
 	// Ref:
 	// https://stackoverflow.com/questions/2507337/how-to-determine-a-terminals-background-color
-	fmt.Println("\x1b]11;?\x07")
+	screen.renderLock.Lock()
+	screen.writeLocked("\x1b]11;?\x07")
+	screen.renderLock.Unlock()
+
 	screen.terminalBackgroundLock.Lock()
-	defer screen.terminalBackgroundLock.Unlock()
 	now := time.Now()
 	screen.terminalBackgroundQuery = &now
+	screen.terminalBackgroundLock.Unlock()
+
+	// Wait for the background color answer (or give up on it) before switching
+	// to the alternate screen. Waiting with the alternate screen already up
+	// makes short lived pagings flash the user's terminal.
+	//
+	// Ref: https://github.com/walles/moor/issues/425
+	screen.TerminalBackground()
+
+	screen.enterAlternateScreenSession()
 
 	return &screen, nil
 }
