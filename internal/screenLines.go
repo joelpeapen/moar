@@ -52,7 +52,10 @@ func (p *Pager) redraw(spinner string) {
 // Nothing reaches the terminal until somebody Show()s the screen. Use this
 // rather than redraw() when the cells are wanted but painting the terminal
 // isn't, for example just before exiting.
-func (p *Pager) renderIntoCells(spinner string) {
+//
+// Returns the number of screen lines the contents ended up on, not counting the
+// status line below them.
+func (p *Pager) renderIntoCells(spinner string) int {
 	log.Trace("renderIntoCells called")
 	p.screen.Clear()
 	p.longestLineLength = 0
@@ -81,6 +84,8 @@ func (p *Pager) renderIntoCells(spinner string) {
 	}
 
 	p.mode.drawFooter(renderedScreen.filenameText, renderedScreen.statusText, spinner)
+
+	return len(renderedScreen.lines)
 }
 
 // Render all lines that should go on the screen.

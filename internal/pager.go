@@ -669,14 +669,12 @@ func (p *Pager) StartPaging(screen twin.Screen, chromaStyle *chroma.Style, chrom
 				if p.fitsOnOneScreen() {
 					// Ref:
 					// https://github.com/walles/moor/issues/113#issuecomment-1368294132
-					p.showLineNumbers = false // Requires a redraw to take effect, see below
+					// The line numbers setting takes effect in
+					// ReprintAfterExit(), which renders after we're gone from
+					// here.
+					p.showLineNumbers = false
 					p.DeInit = false
 					p.quit = true
-
-					// Without this the line numbers setting ^ won't take effect
-					// in ReprintAfterExit(). No need to Show() what we render
-					// here, we are on our way out.
-					p.renderIntoCells(spinner)
 
 					log.Info("Exiting because of --quit-if-one-screen, everything fit on one screen and we're done")
 
@@ -829,9 +827,11 @@ func (p *Pager) fitsOnOneScreen() bool {
 // call this method to print the pager contents to screen again, faking
 // "leaving" pager contents on screen after exit.
 func (p *Pager) ReprintAfterExit() {
-	// Figure out how many screen lines are used by pager contents
-	renderedScreen := p.renderLines()
-	screenLinesCount := len(renderedScreen.lines)
+	// Render into the cells that ShowNLines() below prints from. Doing it here
+	// rather than before exiting the main loop means we pick up any settings
+	// that were changed on the way out, --quit-if-one-screen turning line
+	// numbers off for example.
+	screenLinesCount := p.renderIntoCells("")
 
 	_, screenHeight := p.screen.Size()
 	screenHeightWithoutFooter := screenHeight - p.DeInitFalseMargin
