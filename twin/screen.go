@@ -93,7 +93,7 @@ type UnixScreen struct {
 	renderLock sync.Mutex
 
 	terminalBackground      *Color
-	terminalBackgroundQuery *time.Time // When we asked for the terminal background color
+	terminalBackgroundQuery time.Time // When we asked for the terminal background color
 	terminalBackgroundLock  sync.Mutex
 
 	cells        [][]StyledRune
@@ -186,14 +186,16 @@ func NewScreenWithMouseModeAndColorCount(mouseMode MouseMode, terminalColorCount
 	//
 	// Ref:
 	// https://stackoverflow.com/questions/2507337/how-to-determine-a-terminals-background-color
+	//
+	// Note the query timestamp before asking, so that mainLoop() can never
+	// observe an answer that arrived before we recorded asking for it.
+	screen.terminalBackgroundLock.Lock()
+	screen.terminalBackgroundQuery = time.Now()
+	screen.terminalBackgroundLock.Unlock()
+
 	screen.renderLock.Lock()
 	screen.writeLocked("\x1b]11;?\x07")
 	screen.renderLock.Unlock()
-
-	screen.terminalBackgroundLock.Lock()
-	now := time.Now()
-	screen.terminalBackgroundQuery = &now
-	screen.terminalBackgroundLock.Unlock()
 
 	// Wait for the background color answer (or give up on it) before switching
 	// to the alternate screen. Waiting with the alternate screen already up
@@ -511,7 +513,7 @@ func (screen *UnixScreen) mainLoop() {
 				if bg != nil {
 					screen.terminalBackgroundLock.Lock()
 					screen.terminalBackground = bg
-					log.Debug(fmt.Sprint("Terminal background color detected as ", bg, " after ", time.Since(*screen.terminalBackgroundQuery)))
+					log.Debug(fmt.Sprint("Terminal background color detected as ", bg, " after ", time.Since(screen.terminalBackgroundQuery)))
 					screen.terminalBackgroundLock.Unlock()
 
 					expectingTerminalBackgroundColor = false
@@ -720,7 +722,7 @@ func (screen *UnixScreen) TerminalBackground() *Color {
 
 	// Is it already known?
 	screen.terminalBackgroundLock.Lock()
-	if screen.terminalBackground != nil || time.Since(*screen.terminalBackgroundQuery) > maxWait {
+	if screen.terminalBackground != nil || time.Since(screen.terminalBackgroundQuery) > maxWait {
 		// Either we know the color or we gave up waiting for it. Return it!
 		background := screen.terminalBackground
 		screen.terminalBackgroundLock.Unlock()
@@ -733,7 +735,7 @@ func (screen *UnixScreen) TerminalBackground() *Color {
 	start := screen.terminalBackgroundQuery
 	screen.terminalBackgroundLock.Unlock()
 
-	for time.Since(*start) < maxWait {
+	for time.Since(start) < maxWait {
 		screen.terminalBackgroundLock.Lock()
 		if screen.terminalBackground != nil {
 			// There it is!
