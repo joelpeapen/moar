@@ -86,11 +86,16 @@ One branch per step, each merged into master separately.
       window resize between the last redraw and the reprint would blank the
       reprinted lines.
 
-- [ ] **3. A pty test harness, characterizing current behavior.**
+- [x] **3. A pty test harness, characterizing current behavior.**
       Land it with passing assertions: a long file does emit `ESC[?1049h`, and
       quit-if-one-screen output still lands on the normal screen. Value on its
       own: nothing in the repo can currently assert on escape sequences at all.
       Also the measurement tool for steps 1 and 5.
+      Branch: `pty-test-harness`. Went with `creack/pty`, see the test notes
+      below. What landed captures bytes, not timestamps, so it can tell you
+      *whether* `ESC[?1049h` was written but not for how long the alternate
+      screen was up. The numbers in the table above still come from throwaway
+      measuring code.
 
 - [ ] **4. Make enter/leave alt screen idempotent, defer the enter to the first
       `Show()`.**
@@ -159,5 +164,27 @@ still flash. Unavoidable without waiting longer before showing anything.
   needs a no-op there.
 - `cmd/moor/moor_test.go` injects a fake `newScreen` into `pagerFromArgs`,
   which is the hook for testing startup reordering.
-- There is no pty dependency in `go.mod`. Step 3 decides between adding
-  `creack/pty` for a Go test and driving a small pty helper from `test.sh`.
+- `cmd/moor/pty-harness_test.go` runs moor on a pseudo terminal and captures
+  everything it writes, escape sequences included. `startMoor()` takes an
+  `answerBackgroundQuery` flag, which is the difference between the two rows in
+  the table at the top of this file. Both assertions of step 3 live in
+  `cmd/moor/alt-screen_test.go`.
+- Uses `creack/pty`, which has no ConPTY support, so both files are build
+  tagged `!windows`. `test.sh`'s cross compilation step doesn't build test
+  files, but `.github/workflows/windows-ci.yml` runs `go test ./...` on a real
+  Windows machine, so the tag is load bearing.
+- Wait for painted contents, never for a mode setting escape sequence. Today
+  moor enters the alternate screen before its first redraw, so a `q` sent on
+  seeing `ESC[?1049h` gets handled before anything is drawn and the test then
+  measures nothing. Step 4 moves that enter, but the advice stands: mode
+  settings say nothing about what is on screen.
+- The harness gives moor a file to page. `pty.StartWithSize()` wires stdin,
+  stdout and stderr to the same pty, so there is no way to pipe input in, and
+  `stdinIsRedirected` is always false. Step 5's grace deadline only has a job to
+  do for streams, and `git branch | moor` is the case issue #425 is about, so
+  that step likely needs `startMoor()` reshaped around `pty.Open()` plus an
+  explicit `SysProcAttr{Setsid: true, Setctty: true}`.
+- Step 5's failing test ("must never emit `ESC[?1049h`") belongs next to the
+  other two in `cmd/moor/alt-screen_test.go`. Once it exists,
+  `TestQuitIfOneScreenPrintsOnNormalScreen` no longer guards anything about the
+  alternate screen, only that the contents get printed.
