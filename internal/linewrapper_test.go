@@ -176,10 +176,7 @@ func BenchmarkWrapLine(b *testing.B) {
 
 	styledRunes := tokenize(line)
 
-	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
+	for b.Loop() {
 		_ = wrapLine(73, styledRunes)
 	}
-
-	b.StopTimer()
 }
