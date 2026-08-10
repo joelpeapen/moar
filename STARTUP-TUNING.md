@@ -272,6 +272,15 @@ not a reason to keep this file around.
   `twin/fake-screen.go:104`. It is not part of the `Screen` interface, no
   `UnixScreen` counterpart exists, and nothing calls it. Deletable as is.
 
+- **`go test -count=5 ./internal/` fails `TestSearchHighlight` 4 times out of
+  5.** `internal/screenLines_test.go:126`. The package level style variables in
+  `internal/styling.go:15-29` are set up by `styleUI()` and never reset, so a
+  test that runs after one which styled the UI sees the styles the other test
+  left behind. Only the second and later runs of a `-count=N` are affected, so
+  CI never sees it, but it does mean `-count=N` is not a usable flakiness check
+  for this package. Predates this effort, and the same globals are why the tests
+  added for step 7 stop their pagers when they are done.
+
 - **`FakeScreen.Events()` returns nil, with a `TODO` on it.**
   `twin/fake-screen.go:112-115`. `<-nil` blocks forever, so no test using a
   plain `FakeScreen` can run the pager main loop, which is a large hole given
