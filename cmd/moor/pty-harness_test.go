@@ -38,6 +38,13 @@ const (
 // How long tests wait for moor to write something, or to exit.
 const ptyTimeout = 5 * time.Second
 
+// The size of the pseudo terminal tests run moor on. Tests that care how wide
+// the screen is should say ptyCols rather than spelling out the number.
+const (
+	ptyRows = 24
+	ptyCols = 80
+)
+
 // Where moorBinary() puts the binary it builds. Removed by TestMain().
 var moorBinaryDir string
 
@@ -133,7 +140,7 @@ func startMoor(t *testing.T, options moorOptions) *ptySession {
 	master, slave, err := pty.Open()
 	assert.NilError(t, err)
 	t.Cleanup(func() { _ = master.Close() })
-	assert.NilError(t, pty.Setsize(master, &pty.Winsize{Rows: 24, Cols: 80}))
+	assert.NilError(t, pty.Setsize(master, &pty.Winsize{Rows: ptyRows, Cols: ptyCols}))
 
 	// Moor gets its own copy when it starts, and the capture() goroutine below
 	// needs moor to be the only one holding the slave open. Otherwise reads from
