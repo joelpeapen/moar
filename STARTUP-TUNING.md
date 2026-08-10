@@ -153,6 +153,30 @@ One branch per step, each merged into master separately.
       set, and there is no `ESC[m` after it. Today the alt screen leave resets
       the style on the way out. Once the reprint is the only thing moor writes,
       it needs its own trailing reset.
+      Branch: `quit-if-one-screen-before-redraw`, **partially done**, merged
+      because it is worth having on its own. What landed is the reorder: the
+      check moved above `p.redraw(spinner)`, no grace deadline, no
+      `GetLineCount()` early-out, and `GoInteractive()` still out of the `Screen`
+      interface. Measured 20 runs each, before then after, alt screen entries:
+      20/20 → 0/20 for a `.txt` file argument, 20/20 → 0/20 for a fast pipe.
+      **What remains is the grace deadline, and it is not optional.** A file
+      argument that chroma actually highlights still blinks: a 20 line `.go`
+      file measured 7/15. `HighlightingDone` is only preset at construction when
+      there is no lexer (`internal/reader/constructors.go:56-58`), which is why
+      `.txt` files and piped plain text pass. With a lexer, highlighting blocks
+      on `<-reader.highlightingStyle` until `cmd/moor/moor.go:602`, a few hundred
+      microseconds before the main loop starts, and then loses the race about
+      half the time. `MOOR=--quit-if-one-screen` plus a source file is a
+      mainstream invocation, so this is the case to fix next. Note that the
+      redraw is unconditional once the check declines, so nothing currently
+      holds the first paint back.
+      The trailing reset was needed, but the reasoning above was wrong: the alt
+      screen leave happens *before* the reprint, so it never reset anything the
+      reprint wrote. Every exit already leaked a style, and always had. It goes
+      unnoticed because the leftover background is usually the one the terminal
+      itself answered to the OSC 11 query. A full width colored line makes it
+      obvious, which is what `TestReprintEndsWithStyleReset` pages.
+      `showNLines()` now ends its non-fullscreen output with `ESC[m`.
 
 Ordering constraint: step 5 depends on steps 2 and 4.
 
@@ -181,6 +205,22 @@ not a reason to keep this file around.
 
 Input that is short but dribbles in over longer than the grace period will
 still flash. Unavoidable without waiting longer before showing anything.
+
+There is already a grace period, but nobody designed it: it is whatever moor's
+own startup costs, and it is inverted. Measured with the pty harness, two lines
+piped with a gap between them, 10 runs per cell, alt screen entries:
+
+| gap    | terminal answers OSC 11 | terminal never answers |
+| ------ | ----------------------- | ---------------------- |
+| 50 ms  | 0/10                    | 0/10                   |
+| 70 ms  | 9/10                    | 0/10                   |
+| 150 ms | 10/10                   | 10/10                  |
+
+So the terminals that answer promptly, the good ones, get the *shorter* window,
+somewhere between 50 and 70 ms here. The 50 ms `TerminalBackground()` timeout is
+what pads the other column. Both numbers move with machine speed, and an earlier
+sweep on a busier machine put the answering column's edge closer to 40 ms. An
+explicit deadline would at least be a number somebody chose.
 
 ## Test notes
 
@@ -220,6 +260,12 @@ still flash. Unavoidable without waiting longer before showing anything.
   `TestQuitIfOneScreenNeverEntersAlternateScreen`, over a file/pipe times
   background-query-answered/not matrix. It asserts neither `ESC[?1049h` nor
   `ESC[?1049l`, and `TestLongInputUsesAlternateScreen` covers the other
-  direction for both files and pipes. That leaves
-  `TestQuitIfOneScreenPrintsOnNormalScreen` guarding nothing the new test
-  doesn't, so delete it along with the step 5 fix.
+  direction for both files and pipes. `TestQuitIfOneScreenPrintsOnNormalScreen`
+  guarded nothing those two don't and is gone.
+- `go test ./cmd/moor/` served a cached pass after an edit to `twin/screen.go`,
+  so use `-count=1` when you have just changed something these tests page
+  through. The "(cached)" marker is the tell.
+- Every pty test so far pages input chroma does not highlight, `.txt` files and
+  unclassifiable piped text, which is the only reason they are not flaky. Any
+  test of the startup path wanting the *highlighted* case needs a file argument
+  with a real extension, and will fail until step 5's grace deadline lands.

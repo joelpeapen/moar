@@ -649,10 +649,11 @@ func (p *Pager) StartPaging(screen twin.Screen, chromaStyle *chroma.Style, chrom
 	// Main loop
 	spinner := ""
 	for !p.quit {
+		// Nothing more to process for now, so decide whether to quit, and redraw
+		// if we're staying. Deciding first is what keeps a quit-if-one-screen
+		// exit off the alternate screen: the redraw is what takes us there, and
+		// on the way out we never get that far.
 		if len(screen.Events()) == 0 {
-			// Nothing more to process for now, redraw the screen
-			p.redraw(spinner)
-
 			p.readerLock.Lock()
 			r := p.readers[p.currentReader]
 			p.readerLock.Unlock()
@@ -686,6 +687,8 @@ func (p *Pager) StartPaging(screen twin.Screen, chromaStyle *chroma.Style, chrom
 					break
 				}
 			}
+
+			p.redraw(spinner)
 		}
 
 		event := <-screen.Events()

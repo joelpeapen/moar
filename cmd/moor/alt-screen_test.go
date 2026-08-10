@@ -103,32 +103,6 @@ func createEditorStub(t *testing.T) string {
 	return path
 }
 
-// With --quit-if-one-screen, what moor leaves behind ends up on the user's
-// normal screen, so that it looks like cat printed it.
-func TestQuitIfOneScreenPrintsOnNormalScreen(t *testing.T) {
-	for _, answerBackgroundQuery := range []bool{true, false} {
-		t.Run(fmt.Sprintf("answerBackgroundQuery=%t", answerBackgroundQuery), func(t *testing.T) {
-			// Two lines fit on our 24 line screen, so moor quits by itself
-			session := startMoor(t, moorOptions{
-				answerBackgroundQuery: answerBackgroundQuery,
-				args:                  []string{"--quit-if-one-screen", createTextFile(t, 2)},
-			})
-			session.wait(t)
-
-			captured := session.captured()
-			printedAt := strings.LastIndex(captured, "hello world 2")
-			assert.Assert(t, printedAt >= 0,
-				"Never printed the file contents:\n%s", humanizeEscapes(captured))
-
-			// Negative if moor never entered the alternate screen at all, which
-			// puts the contents on the normal screen just as well
-			leftAltScreenAt := strings.LastIndex(captured, altScreenLeave)
-			assert.Assert(t, printedAt > leftAltScreenAt,
-				"File contents printed on the alternate screen:\n%s", humanizeEscapes(captured))
-		})
-	}
-}
-
 // With --quit-if-one-screen, input that fits on one screen and is there for the
 // taking never reaches the alternate screen at all. Switching there and right
 // back again makes the terminal flash.
