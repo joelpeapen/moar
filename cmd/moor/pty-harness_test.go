@@ -14,6 +14,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"syscall"
 	"testing"
 	"time"
 
@@ -97,32 +98,49 @@ type ptySession struct {
 	answerBackgroundQuery bool
 }
 
-// Starts moor on an 80x24 pseudo terminal with the given command line
-// arguments, and starts capturing everything it writes.
-//
-// With answerBackgroundQuery set, the harness answers moor's terminal
-// background color query the way a real terminal would. Without it moor has to
-// wait out its answer timeout, just like on terminals not supporting the query.
-// Both are real world cases, and moor's startup timing differs a lot between
-// them.
+// How to start moor. See startMoor().
+type moorOptions struct {
+	// Answer moor's terminal background color query the way a real terminal
+	// would. Without this moor has to wait out its answer timeout, just like on
+	// terminals not supporting the query. Both are real world cases, and moor's
+	// startup timing differs a lot between them.
+	answerBackgroundQuery bool
+
+	// "NAME=value" entries added to moor's otherwise minimal environment.
+	extraEnv []string
+
+	// Piped into moor's stdin, which is then closed. Nil hands moor the pty as
+	// its stdin instead, which is what makes stdinIsRedirected false.
+	stdin *string
+
+	// Moor's command line arguments.
+	args []string
+}
+
+// Starts moor on an 80x24 pseudo terminal, and starts capturing everything it
+// writes. See the moorOptions fields for the knobs.
 //
 // The process is killed when the test ends. To have moor exit by itself, either
 // send it a quit key or give it a reason to quit on its own, then wait().
-func startMoor(t *testing.T, answerBackgroundQuery bool, args ...string) *ptySession {
-	t.Helper()
-
-	return startMoorWithEnv(t, answerBackgroundQuery, nil, args...)
-}
-
-// Like startMoor(), but with extraEnv ("NAME=value" entries) added to moor's
-// otherwise minimal environment.
-func startMoorWithEnv(t *testing.T, answerBackgroundQuery bool, extraEnv []string, args ...string) *ptySession {
+func startMoor(t *testing.T, options moorOptions) *ptySession {
 	t.Helper()
 
 	binary, err := moorBinary()
 	assert.NilError(t, err)
 
-	cmd := exec.Command(binary, args...)
+	// Sizing the terminal before starting moor means moor can never observe any
+	// other size than this one.
+	master, slave, err := pty.Open()
+	assert.NilError(t, err)
+	t.Cleanup(func() { _ = master.Close() })
+	assert.NilError(t, pty.Setsize(master, &pty.Winsize{Rows: 24, Cols: 80}))
+
+	// Moor gets its own copy when it starts, and the capture() goroutine below
+	// needs moor to be the only one holding the slave open. Otherwise reads from
+	// the master would block forever rather than reporting moor gone.
+	defer func() { _ = slave.Close() }()
+
+	cmd := exec.Command(binary, options.args...)
 
 	// Explicit and minimal, so that neither the MOOR, MOAR, TERM and COLORTERM
 	// settings nor the search history of whoever runs the tests can change what
@@ -131,18 +149,34 @@ func startMoorWithEnv(t *testing.T, answerBackgroundQuery bool, extraEnv []strin
 		"TERM=xterm-256color",
 		"PATH=" + os.Getenv("PATH"),
 		"HOME=" + t.TempDir(),
-	}, extraEnv...)
+	}, options.extraEnv...)
 
-	// Sizing the terminal before starting moor means moor can never observe any
-	// other size than this one.
-	master, err := pty.StartWithSize(cmd, &pty.Winsize{Rows: 24, Cols: 80})
-	assert.NilError(t, err)
+	cmd.Stdin = slave
+	cmd.Stdout = slave
+	cmd.Stderr = slave
+
+	var stdinWriter *os.File
+	if options.stdin != nil {
+		stdinReader, writer, err := os.Pipe()
+		assert.NilError(t, err)
+		defer func() { _ = stdinReader.Close() }()
+
+		cmd.Stdin = stdinReader
+		stdinWriter = writer
+	}
+
+	// Ctty is an fd number in the child, where stdout is always 1. Moor's
+	// keypresses don't come from here, twin dups stdout for those, but SIGWINCH
+	// does, and $EDITOR expects a controlling terminal to do job control on.
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true, Setctty: true, Ctty: 1}
+
+	assert.NilError(t, cmd.Start())
 
 	session := &ptySession{
 		master:                master,
 		cmd:                   cmd,
 		exited:                make(chan struct{}),
-		answerBackgroundQuery: answerBackgroundQuery,
+		answerBackgroundQuery: options.answerBackgroundQuery,
 	}
 
 	t.Cleanup(func() {
@@ -157,11 +191,17 @@ func startMoorWithEnv(t *testing.T, answerBackgroundQuery bool, extraEnv []strin
 
 		// Reap moor, in case this test never called wait(). Harmless if it did.
 		_ = cmd.Wait()
-
-		_ = master.Close()
 	})
 
 	go session.capture()
+
+	// After capture() is running, so that a payload larger than the pty buffer
+	// can't wedge moor between a blocked write to us and a blocked read from us.
+	if stdinWriter != nil {
+		_, err = stdinWriter.WriteString(*options.stdin)
+		assert.NilError(t, err)
+		assert.NilError(t, stdinWriter.Close())
+	}
 
 	return session
 }
@@ -274,17 +314,24 @@ func (s *ptySession) wait(t *testing.T) {
 	assert.NilError(t, s.cmd.Wait(), "moor wrote:\n%s", humanizeEscapes(s.captured()))
 }
 
-// Creates a file with the requested number of lines, and returns its path.
-func createTextFile(t *testing.T, lineCount int) string {
-	t.Helper()
-
+// The requested number of lines of text, for piping into moor.
+func textLines(lineCount int) string {
 	contents := strings.Builder{}
 	for i := 1; i <= lineCount; i++ {
 		fmt.Fprintf(&contents, "hello world %d\n", i)
 	}
 
+	return contents.String()
+}
+
+// Creates a file with the requested number of lines, and returns its path. The
+// contents are the same as textLines() would give you, so that a test can page
+// the same text from a file and from a pipe.
+func createTextFile(t *testing.T, lineCount int) string {
+	t.Helper()
+
 	path := filepath.Join(t.TempDir(), fmt.Sprintf("hello-%d.txt", lineCount))
-	assert.NilError(t, os.WriteFile(path, []byte(contents.String()), 0o600))
+	assert.NilError(t, os.WriteFile(path, []byte(textLines(lineCount)), 0o600))
 
 	return path
 }

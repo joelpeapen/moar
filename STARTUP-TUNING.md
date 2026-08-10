@@ -194,10 +194,10 @@ still flash. Unavoidable without waiting longer before showing anything.
 - `cmd/moor/moor_test.go` injects a fake `newScreen` into `pagerFromArgs`,
   which is the hook for testing startup reordering.
 - `cmd/moor/pty-harness_test.go` runs moor on a pseudo terminal and captures
-  everything it writes, escape sequences included. `startMoor()` takes an
-  `answerBackgroundQuery` flag, which is the difference between the two rows in
-  the table at the top of this file. Both assertions of step 3 live in
-  `cmd/moor/alt-screen_test.go`.
+  everything it writes, escape sequences included. `startMoor()` takes a
+  `moorOptions`, whose `answerBackgroundQuery` field is the difference between
+  the two rows in the table at the top of this file. Both assertions of step 3
+  live in `cmd/moor/alt-screen_test.go`.
 - Uses `creack/pty`, which has no ConPTY support, so both files are build
   tagged `!windows`. `test.sh`'s cross compilation step doesn't build test
   files, but `.github/workflows/windows-ci.yml` runs `go test ./...` on a real
@@ -206,15 +206,20 @@ still flash. Unavoidable without waiting longer before showing anything.
   enters the alternate screen with its first redraw, so a `q` sent on seeing
   `ESC[?1049h` gets handled before anything is drawn and the test then measures
   nothing. Mode settings say nothing about what is on screen.
-- `startMoorWithEnv()` is how you give moor an `$EDITOR`, which is the only way
-  to exercise `PauseAndCall()` from a test.
-- The harness gives moor a file to page. `pty.StartWithSize()` wires stdin,
-  stdout and stderr to the same pty, so there is no way to pipe input in, and
-  `stdinIsRedirected` is always false. Step 5's grace deadline only has a job to
-  do for streams, and `git branch | moor` is the case issue #425 is about, so
-  that step likely needs `startMoor()` reshaped around `pty.Open()` plus an
-  explicit `SysProcAttr{Setsid: true, Setctty: true}`.
-- Step 5's failing test ("must never emit `ESC[?1049h`") belongs next to the
-  other two in `cmd/moor/alt-screen_test.go`. Once it exists,
-  `TestQuitIfOneScreenPrintsOnNormalScreen` no longer guards anything about the
-  alternate screen, only that the contents get printed.
+- `moorOptions.extraEnv` is how you give moor an `$EDITOR`, which is the only
+  way to exercise `PauseAndCall()` from a test.
+- `moorOptions.stdin` pipes input into moor, which is what makes
+  `stdinIsRedirected` true and `git branch | moor` testable. It took reshaping
+  the harness around `pty.Open()` plus an explicit `SysProcAttr{Setsid: true,
+  Setctty: true, Ctty: 1}`, because `pty.StartWithSize()` wires stdin, stdout
+  and stderr to the same pty. `Ctty` is an fd number in the child, and with
+  stdin taken by the pipe the pty is fd 1. Moor's keypresses don't come from the
+  controlling terminal, `twin/screen-setup.go:147` dups stdout for those, but
+  SIGWINCH does.
+- Step 5's failing test lives in `cmd/moor/alt-screen_test.go` as
+  `TestQuitIfOneScreenNeverEntersAlternateScreen`, over a file/pipe times
+  background-query-answered/not matrix. It asserts neither `ESC[?1049h` nor
+  `ESC[?1049l`, and `TestLongInputUsesAlternateScreen` covers the other
+  direction for both files and pipes. That leaves
+  `TestQuitIfOneScreenPrintsOnNormalScreen` guarding nothing the new test
+  doesn't, so delete it along with the step 5 fix.
