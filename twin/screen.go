@@ -1214,6 +1214,14 @@ func (screen *UnixScreen) showNLines(width int, height int, fullScreen bool) {
 		renderWithNewline(&builder, screen.cells[row], width, screen.terminalColorCount, row == (height-1))
 	}
 
+	if !fullScreen {
+		// The last line can end with a color still set. On the alternate screen
+		// leaving it restores the style, but here we are printing onto the
+		// user's own screen, so whatever we leave behind is what their next
+		// shell prompt gets rendered in.
+		builder.WriteString("\x1b[m")
+	}
+
 	// Write out what we have
 	screen.writeLocked(builder.String())
 	screen.snapshotLastRenderedLocked()
