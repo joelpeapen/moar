@@ -97,7 +97,7 @@ One branch per step, each merged into master separately.
       screen was up. The numbers in the table above still come from throwaway
       measuring code.
 
-- [ ] **4. Make enter/leave alt screen idempotent, defer the enter to the first
+- [x] **4. Make enter/leave alt screen idempotent, defer the enter to the first
       `Show()`.**
       An `alternateScreenActive` flag guarding
       `enterAlternateScreenSession()` (`twin/screen.go:276`) and
@@ -114,16 +114,45 @@ One branch per step, each merged into master separately.
       teleport the cursor.
       Verify during this step that nothing else writes to the terminal between
       `NewScreen` and the first `Show()`.
+      Branch: `defer-alt-screen-enter`. Verified: on the happy path nothing
+      writes to the terminal in that window. `twin`'s only write path is
+      `writeLocked()`, `cmd/moor/moor.go` writes to stderr only before
+      `newScreen()` or after `Close()`, and logrus goes to a buffer. A *panic*
+      in that window still prints on the normal screen, which after this step is
+      strictly better than being stuck on the alternate one.
+      Idempotency alone wasn't enough, two more flags were needed, both
+      guarding against a concurrent `Show()` putting us back on the alternate
+      screen: `closed`, because the signal handler `Close()`s while the pager
+      goroutine is still running, and `paused`, for the `PauseAndCall()` window
+      where the terminal belongs to an editor or to the shell after Ctrl-Z.
+      `PauseAndCall()` now also restores what it found rather than
+      unconditionally entering. That fixes a real old unpaired leave: Ctrl-C
+      while the editor was running used to hit `PauseAndCall()`'s leave *and*
+      `Close()`'s leave, teleporting the cursor. `Show()` bails out instead of
+      painting when the alternate screen isn't ours.
+      Skipped `GoInteractive()`: nothing calls it until step 5, and adding a
+      method to the exported `Screen` interface is a breaking change for
+      anybody implementing it. Step 5 can add it when it has a use for it.
+      This step is byte-neutral: `redraw()` still runs before the
+      quit-if-one-screen check, so the first `Show()` still enters the
+      alternate screen just as early as the old `NewScreen` did.
 
 - [ ] **5. The actual fix: restructure the pager loop.**
       Evaluate quit-if-one-screen before the first redraw
       (`internal/pager.go:668` currently sits below the redraw at
       `internal/pager.go:654`), skip rendering while the decision is open, and
       go interactive when `GetLineCount() > height`, on any key or mouse event,
-      or on a grace deadline of ~50-100 ms. The line-count early-out means
+      or on a grace deadline of ~50-100 ms. Step 4 deliberately left the
+      `GoInteractive()` method out of the `Screen` interface, add it here if
+      going interactive needs to be separable from painting a frame. The line-count early-out means
       large files and streams see zero added latency. Reproduce with a failing
       pty test first: short quick input with `--quit-if-one-screen` must never
       emit `ESC[?1049h`.
+      Watch the last line of `ReprintAfterExit()`: `renderLine()`
+      (`twin/screen.go:1026`) can end it with a non-default background still
+      set, and there is no `ESC[m` after it. Today the alt screen leave resets
+      the style on the way out. Once the reprint is the only thing moor writes,
+      it needs its own trailing reset.
 
 Ordering constraint: step 5 depends on steps 2 and 4.
 
@@ -173,11 +202,12 @@ still flash. Unavoidable without waiting longer before showing anything.
   tagged `!windows`. `test.sh`'s cross compilation step doesn't build test
   files, but `.github/workflows/windows-ci.yml` runs `go test ./...` on a real
   Windows machine, so the tag is load bearing.
-- Wait for painted contents, never for a mode setting escape sequence. Today
-  moor enters the alternate screen before its first redraw, so a `q` sent on
-  seeing `ESC[?1049h` gets handled before anything is drawn and the test then
-  measures nothing. Step 4 moves that enter, but the advice stands: mode
-  settings say nothing about what is on screen.
+- Wait for painted contents, never for a mode setting escape sequence. Moor
+  enters the alternate screen with its first redraw, so a `q` sent on seeing
+  `ESC[?1049h` gets handled before anything is drawn and the test then measures
+  nothing. Mode settings say nothing about what is on screen.
+- `startMoorWithEnv()` is how you give moor an `$EDITOR`, which is the only way
+  to exercise `PauseAndCall()` from a test.
 - The harness gives moor a file to page. `pty.StartWithSize()` wires stdin,
   stdout and stderr to the same pty, so there is no way to pipe input in, and
   `stdinIsRedirected` is always false. Step 5's grace deadline only has a job to

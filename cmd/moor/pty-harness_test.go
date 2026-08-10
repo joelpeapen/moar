@@ -111,6 +111,14 @@ type ptySession struct {
 func startMoor(t *testing.T, answerBackgroundQuery bool, args ...string) *ptySession {
 	t.Helper()
 
+	return startMoorWithEnv(t, answerBackgroundQuery, nil, args...)
+}
+
+// Like startMoor(), but with extraEnv ("NAME=value" entries) added to moor's
+// otherwise minimal environment.
+func startMoorWithEnv(t *testing.T, answerBackgroundQuery bool, extraEnv []string, args ...string) *ptySession {
+	t.Helper()
+
 	binary, err := moorBinary()
 	assert.NilError(t, err)
 
@@ -119,11 +127,11 @@ func startMoor(t *testing.T, answerBackgroundQuery bool, args ...string) *ptySes
 	// Explicit and minimal, so that neither the MOOR, MOAR, TERM and COLORTERM
 	// settings nor the search history of whoever runs the tests can change what
 	// moor does here.
-	cmd.Env = []string{
+	cmd.Env = append([]string{
 		"TERM=xterm-256color",
 		"PATH=" + os.Getenv("PATH"),
 		"HOME=" + t.TempDir(),
-	}
+	}, extraEnv...)
 
 	// Sizing the terminal before starting moor means moor can never observe any
 	// other size than this one.
@@ -204,6 +212,16 @@ func (s *ptySession) captured() string {
 func (s *ptySession) waitFor(t *testing.T, needle string) {
 	t.Helper()
 
+	s.waitForCount(t, needle, 1)
+}
+
+// Blocks until moor has written needle at least count times, and fails the test
+// if moor exits or times out before that.
+//
+// See waitFor() for what makes a good needle.
+func (s *ptySession) waitForCount(t *testing.T, needle string, count int) {
+	t.Helper()
+
 	deadline := time.Now().Add(ptyTimeout)
 	for {
 		// Check this before looking at the output, so that the last look
@@ -215,18 +233,19 @@ func (s *ptySession) waitFor(t *testing.T, needle string) {
 		default:
 		}
 
-		if strings.Contains(s.captured(), needle) {
+		if strings.Count(s.captured(), needle) >= count {
 			return
 		}
 
 		if moorIsGone {
-			t.Fatalf("Moor exited without writing %s, it wrote:\n%s",
-				humanizeEscapes(needle), humanizeEscapes(s.captured()))
+			t.Fatalf("Moor exited after writing %s only %d of %d times, it wrote:\n%s",
+				humanizeEscapes(needle), strings.Count(s.captured(), needle), count,
+				humanizeEscapes(s.captured()))
 		}
 
 		if time.Now().After(deadline) {
-			t.Fatalf("Timed out waiting for %s, moor wrote:\n%s",
-				humanizeEscapes(needle), humanizeEscapes(s.captured()))
+			t.Fatalf("Timed out waiting for %s to show up %d times, moor wrote:\n%s",
+				humanizeEscapes(needle), count, humanizeEscapes(s.captured()))
 		}
 
 		time.Sleep(time.Millisecond)
