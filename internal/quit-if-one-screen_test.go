@@ -81,22 +81,38 @@ func startPagingInBackground(t *testing.T, pager *Pager, screen *countingScreen)
 	return pagingDone
 }
 
-// Wait for the pager to decide whether to paint, and report whether it painted.
-func paintedBeforeReadingEvents(t *testing.T, screen *countingScreen, pagingDone chan struct{}) bool {
+// Hand an event to the pager, and wait for the pager to take it.
+//
+// Fails the test rather than hanging if the pager is not taking events.
+func handEvent(t *testing.T, screen *countingScreen, pagingDone chan struct{}, event twin.Event) {
 	t.Helper()
 
 	select {
-	case screen.events <- nudge{}:
-		return screen.shows.Load() > 0
+	case screen.events <- event:
 
 	case <-pagingDone:
-		t.Fatal("Pager quit instead of deciding whether to paint")
+		t.Fatal("Pager quit instead of taking our event")
 
 	case <-time.After(pagerTimeout):
 		t.Fatal("Pager never got as far as reading events")
 	}
+}
 
-	return false // Unreachable, t.Fatal() above ends the test
+// Report whether the pager has painted anything, once it has decided whether to.
+//
+// The pager takes events only after deciding, so handing it an event it ignores
+// and waiting for that to be taken puts the decision behind us.
+//
+// Only ever asks about paints up to that decision. A caller that hands over
+// something the pager reacts to must ask before handing it over, not after: this
+// answer is read after the pager is free to run on, so a later lap's paint can
+// still land in it.
+func hasPainted(t *testing.T, screen *countingScreen, pagingDone chan struct{}) bool {
+	t.Helper()
+
+	handEvent(t, screen, pagingDone, nudge{})
+
+	return screen.shows.Load() > 0
 }
 
 // With --quit-if-one-screen, contents that fit must never be painted, not even
@@ -123,7 +139,7 @@ func TestQuitIfOneScreenPaintsNothingWhileHighlighting(t *testing.T) {
 
 	pagingDone := startPagingInBackground(t, pager, screen)
 
-	painted := paintedBeforeReadingEvents(t, screen, pagingDone)
+	painted := hasPainted(t, screen, pagingDone)
 	assert.Assert(t, !painted,
 		"Nothing should be painted while we don't know whether the contents fit")
 
@@ -156,7 +172,37 @@ func TestQuitIfOneScreenPaintsContentsThatDoNotFit(t *testing.T) {
 
 	pagingDone := startPagingInBackground(t, pager, screen)
 
-	painted := paintedBeforeReadingEvents(t, screen, pagingDone)
+	painted := hasPainted(t, screen, pagingDone)
 	assert.Assert(t, painted,
 		"Contents that don't fit should be painted without waiting for highlighting")
+}
+
+// Waiting for highlighting must never cost the user their session.
+//
+// Highlighting is not guaranteed to finish: a panic while highlighting is only
+// logged, and leaves it pending forever. So the wait lasts only until the user
+// does something, and then they get their contents.
+func TestQuitIfOneScreenPaintsForAUserWhoAsks(t *testing.T) {
+	testReader := reader.NewFromTextForTesting("", "hello\nworld")
+	testReader.MaybeDone = make(chan bool, 2)
+
+	// Highlighting that never finishes, like after a panic while highlighting
+	testReader.HighlightingDone.Store(false)
+
+	screen := newCountingScreen(20, 10)
+
+	pager := NewPager(testReader)
+	pager.QuitIfOneScreen = true
+
+	pagingDone := startPagingInBackground(t, pager, screen)
+
+	painted := hasPainted(t, screen, pagingDone)
+	assert.Assert(t, !painted, "Nothing should be painted before the user asks")
+
+	// A mouse event with no buttons set: the pager has nothing to do about it
+	// beyond noticing that somebody is there.
+	handEvent(t, screen, pagingDone, twin.EventMouse{})
+
+	painted = hasPainted(t, screen, pagingDone)
+	assert.Assert(t, painted, "A user who asks should get the contents, highlighted or not")
 }
