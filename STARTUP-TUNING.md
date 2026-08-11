@@ -302,17 +302,6 @@ not a reason to keep this file around.
   for this package. Predates this effort, and the same globals are why the tests
   added for step 7 stop their pagers when they are done.
 
-- **`FakeScreen.Events()` returns nil, with a `TODO` on it.**
-  `twin/fake-screen.go:112-115`. `<-nil` blocks forever, so no test using a
-  plain `FakeScreen` can run the pager main loop, which is a large hole given
-  how many tests use it. Step 7 sidesteps it with a local screen double
-  embedding `*twin.FakeScreen`, rather than fixing it, because handing
-  `FakeScreen` a real channel changes behavior under every existing user at
-  once: the goroutine at `internal/pager.go:641-643` does an unguarded
-  `screen.Events() <- eventMaybeDone{}`, which parks forever on today's nil
-  channel and would start filling a buffer instead. Worth doing properly if a
-  second test wants the main loop.
-
 ## Known residue after all of this
 
 Input that is short but dribbles in over longer than the grace period will
@@ -348,7 +337,7 @@ so it keeps its blink. `--reformat` is off by default
   loop body never runs there. Steps 5, 7 and 8 do not disturb those tests,
   which also means they will not catch regressions in them. It couldn't run the
   loop even without the `Quit()`: `twin.FakeScreen.Events()` returns nil
-  (`twin/fake-screen.go:112-115`) and `<-nil` blocks forever. A test that wants
+  (`twin/fake-screen.go:112-123`) and `<-nil` blocks forever. A test that wants
   the loop needs a screen double embedding `*twin.FakeScreen` with a real events
   channel, which also gives it somewhere to count `Show()` calls. Embed
   `*twin.FakeScreen`, pointer included, since its methods are all on pointer

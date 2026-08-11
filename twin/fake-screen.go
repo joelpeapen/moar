@@ -110,7 +110,15 @@ func (screen *FakeScreen) TerminalBackground() *Color {
 }
 
 func (screen *FakeScreen) Events() chan Event {
-	// TODO: Do better here if or when this becomes a problem
+	// TODO: Do better here if or when this becomes a problem.
+	//
+	// Returning nil means <-nil blocks forever, so no test using a plain
+	// FakeScreen can run the pager main loop. Handing out a real channel
+	// instead would change behavior under every existing user at once: senders
+	// do an unguarded screen.Events() <- ..., which parks forever on today's
+	// nil channel but would start filling a buffer. Until that is sorted out, a
+	// test that wants the main loop can embed *FakeScreen in a screen type of
+	// its own and return a real channel from there.
 	return nil
 }
 
