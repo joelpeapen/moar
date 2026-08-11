@@ -172,7 +172,7 @@ One branch per step, each merged into master separately.
       colored line makes it obvious, which is what
       `TestReprintEndsWithStyleReset` pages.
 
-- [ ] **7. Close the highlighting race.**
+- [x] **7. Close the highlighting race.**
       `moor --quit-if-one-screen foo.go` still blinks, measured 7/15 on a 20
       line `.go` file. `HighlightingDone` is only preset at construction when
       there is no lexer (`internal/reader/constructors.go:56-58`), which is why
@@ -230,15 +230,36 @@ One branch per step, each merged into master separately.
       starts that loop only after highlighting has finished once
       (`internal/reader/consumer.go:50`) and it sleeps a second before its first
       poll (`internal/reader/watcher.go:303-307`).
+      Branch: `hold-first-paint-for-highlighting`. Measured with the pty harness
+      on a 20 line `.go` file, 15 runs each: 5/15 alternate screen entries
+      before, 0/15 after.
+      The predicate ended up named `canQuitIfOneScreen()` rather than
+      `shouldHoldFirstPaint()`, because the quit branch needs the same answer
+      and only the hold cares about `sawUserInput`. Holding is then a two line
+      `holdPaint := canQuit && !p.sawUserInput` at the call site. Step 8 wants
+      the hold without `canQuitIfOneScreen()`'s `ReadingDone` requirement, so it
+      will have to split the predicate rather than just reuse it.
+      Read `HighlightingDone` *before* counting the lines, never after.
+      Highlighting replaces the lines and only then sets the flag, so a flag
+      read first means the lines counted afterwards are the highlighted ones.
+      The other order can quit on a pre-highlighting count that highlighting
+      already invalidated, which with `--reformat` means a truncated file on
+      screen and exit code 0.
+      The reader hardening this step listed as optional turned out to be
+      required, and landed here rather than being deferred: with the hold in
+      place, a panic while highlighting means moor paints *nothing* until a
+      keypress, which is worse than the spinning spinner it used to mean.
 
 - [ ] **8. Grace deadline for slow producers.**
       Short input that dribbles in over longer than the accidental window
       described under "Known residue" still flashes. Hold the first paint until
       reading finishes, a key or mouse event arrives, or a deadline of
-      ~50-100 ms expires. Reuse step 7's `shouldHoldFirstPaint()`, dropping its
-      `ReadingDone` requirement, so that large inputs still never wait: the
-      `fitsOnOneScreen()` gate releases the hold by itself as soon as the
-      growing input outgrows a screen, and the deadline then never matters.
+      ~50-100 ms expires. Split step 7's `canQuitIfOneScreen()` so the hold gets
+      the same checks without its `ReadingDone` requirement, and large inputs
+      still never wait: the `fitsOnOneScreen()` part releases the hold by itself
+      as soon as the growing input outgrows a screen, and the deadline then never
+      matters. `sawUserInput` from step 7 is the "or a key or mouse event
+      arrives" half, already done.
       The numbers under "Known residue" are the input to picking the deadline.
       Deliberately parked: unlike every other step, this one requires somebody
       to choose a timeout, and it only buys the case where the producer is slow
@@ -376,9 +397,22 @@ so it keeps its blink. `--reformat` is off by default
 - Every pty test so far pages input chroma does not highlight, `.txt` files and
   unclassifiable piped text, which is the only reason they are not flaky. Any
   test of the startup path wanting the *highlighted* case needs a file argument
-  with a real extension, or piped JSON, and will fail until step 7 lands. Such a
-  test cannot look for a multi-word phrase in the captured output, chroma puts
-  SGR sequences between the tokens; assert on a single identifier instead.
-  Pre-step-7 it only fails about half the time, so it is a regression net rather
-  than a reproducer, and the reproducer should be a deterministic pager level
-  test instead.
+  with a real extension, or piped JSON. Such a test cannot look for a multi-word
+  phrase in the captured output, chroma puts SGR sequences between the tokens;
+  assert on a single identifier instead.
+- Step 7's tests are `internal/quit-if-one-screen_test.go` for the contract and
+  `TestQuitIfOneScreenNeverEntersAlternateScreenWhenHighlighted` in
+  `cmd/moor/alt-screen_test.go` for the end to end net. The pty one caught the
+  blink 4 times in 20 pre-step-7 subtest runs, so it is a net and not a
+  reproducer; the deterministic reproducer is the pager level one.
+- Size the input for a pty test of the highlighting race. Four lines of Go are
+  highlighted before the pager even starts, so such a test passes with or without
+  step 7. Twenty dense lines lose the race often enough to be worth having, and
+  still fit on the harness' 24 line screen. Time-sensitive either way: it is
+  measuring a margin of tens of microseconds.
+- The pager main loop cannot be run with a plain `twin.FakeScreen`, see the
+  `Events()` item under Deferred. `internal/quit-if-one-screen_test.go` has a
+  screen double that can, counts `Show()` calls, and uses sends on an unbuffered
+  event channel as handshakes with the main loop so that nothing has to sleep.
+  Ask it whether it painted *before* handing it an event it reacts to: the answer
+  is read once the pager is free to run on, so a later lap's paint lands in it.
