@@ -892,6 +892,13 @@ func (p *Pager) fitsOnOneScreen() bool {
 // call this method to print the pager contents to screen again, faking
 // "leaving" pager contents on screen after exit.
 func (p *Pager) ReprintAfterExit() {
+	// We print content lines only, so don't let the rendering reserve a row for
+	// a status bar we never print. With a zero DeInitFalseMargin that row is the
+	// difference between printing the last line and dropping it.
+	showStatusBar := p.ShowStatusBar
+	p.ShowStatusBar = false
+	defer func() { p.ShowStatusBar = showStatusBar }()
+
 	// Render into the cells that ShowNLines() below prints from
 	screenLinesCount := p.renderIntoCells("")
 

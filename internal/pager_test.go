@@ -195,6 +195,47 @@ func TestReprintAfterExitUsesCurrentSettings(t *testing.T) {
 	assert.Equal(t, "hello", rowToString(screen.GetRow(0)))
 }
 
+// With no margin reserved for the shell prompt, contents that fitsOnOneScreen()
+// accepts reach the last screen row. ReprintAfterExit() prints that row too:
+// nothing is dropped for a status bar it doesn't print.
+func TestReprintAfterExitFillsScreen(t *testing.T) {
+	for _, wrapLongLines := range []bool{false, true} {
+		t.Run(fmt.Sprintf("wrapLongLines=%v", wrapLongLines), func(t *testing.T) {
+			isolateStyles(t)
+
+			const screenHeight = 10
+
+			var lines []string
+			for lineNumber := 1; lineNumber <= screenHeight; lineNumber++ {
+				lines = append(lines, fmt.Sprintf("line %d", lineNumber))
+			}
+			reader := reader.NewFromTextForTesting("", strings.Join(lines, "\n"))
+			assert.NilError(t, reader.Wait())
+
+			screen := twin.NewFakeScreen(20, screenHeight)
+			pager := NewPager(reader)
+			pager.ShowLineNumbers = false
+			pager.showLineNumbers = false
+			pager.WrapLongLines = wrapLongLines
+			pager.DeInitFalseMargin = 0
+
+			// Tell our Pager to quit immediately
+			pager.Quit()
+
+			// Except for just quitting, this also associates our FakeScreen with
+			// the Pager
+			pager.StartPaging(screen, nil, nil)
+
+			assert.Assert(t, pager.fitsOnOneScreen())
+
+			pager.ReprintAfterExit()
+
+			assert.Equal(t, "line 1", rowToString(screen.GetRow(0)))
+			assert.Equal(t, "line 10", rowToString(screen.GetRow(screenHeight-1)))
+		})
+	}
+}
+
 // assertIndexOfFirstX verifies the (zero-based) index of the first 'x'
 func assertIndexOfFirstX(t *testing.T, tabSize int, s string, expectedIndex int) {
 	reader := reader.NewFromTextForTesting("", s)
