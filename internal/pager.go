@@ -316,21 +316,21 @@ func renderHelpText(help string) []twin.StyledRune {
 	var result []twin.StyledRune
 
 	shortcutHighlight := twin.AttrBold
-	if statusbarStyle.HasAttr(shortcutHighlight) {
+	if theme.statusbar.HasAttr(shortcutHighlight) {
 		shortcutHighlight = twin.AttrUnderline
 	}
-	if statusbarStyle.HasAttr(shortcutHighlight) {
+	if theme.statusbar.HasAttr(shortcutHighlight) {
 		shortcutHighlight = twin.AttrReverse
 	}
 
-	style := statusbarStyle
+	style := theme.statusbar
 	for _, token := range help {
 		if token == '\'' {
 			// Highlight things within single quotes
-			if style == statusbarStyle {
-				style = statusbarStyle.WithAttr(shortcutHighlight)
+			if style == theme.statusbar {
+				style = theme.statusbar.WithAttr(shortcutHighlight)
 			} else {
-				style = statusbarStyle
+				style = theme.statusbar
 			}
 			continue
 		}
@@ -356,17 +356,17 @@ func (p *Pager) setFooter(prefix string, filename string, status string, help st
 
 	// Prefix (multiple open files)
 	for _, token := range prefix {
-		pos += p.screen.SetCell(pos, height-1, twin.NewStyledRune(token, statusbarStyle))
+		pos += p.screen.SetCell(pos, height-1, twin.NewStyledRune(token, theme.statusbar))
 	}
 
 	// File name
 	for _, token := range filename {
-		pos += p.screen.SetCell(pos, height-1, twin.NewStyledRune(token, statusbarFileStyle))
+		pos += p.screen.SetCell(pos, height-1, twin.NewStyledRune(token, theme.statusbarFile))
 	}
 
 	// percentage,
 	for _, token := range status + "  " {
-		pos += p.screen.SetCell(pos, height-1, twin.NewStyledRune(token, statusbarStyle))
+		pos += p.screen.SetCell(pos, height-1, twin.NewStyledRune(token, theme.statusbar))
 	}
 
 	// Help text, highlight keyboard shortcuts
@@ -375,7 +375,7 @@ func (p *Pager) setFooter(prefix string, filename string, status string, help st
 	}
 
 	for pos < width {
-		pos += p.screen.SetCell(pos, height-1, twin.NewStyledRune(' ', statusbarStyle))
+		pos += p.screen.SetCell(pos, height-1, twin.NewStyledRune(' ', theme.statusbar))
 	}
 }
 

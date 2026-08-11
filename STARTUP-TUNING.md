@@ -289,15 +289,6 @@ not a reason to keep this file around.
   `--no-clear-on-exit-margin 0`, and quietly through `pkg/moor`, which sets
   `QuitIfOneScreen` but never `DeInitFalseMargin`.
 
-- **`go test -count=5 ./internal/` fails `TestSearchHighlight` 4 times out of
-  5.** `internal/screenLines_test.go:126`. The package level style variables in
-  `internal/styling.go:15-29` are set up by `styleUI()` and never reset, so a
-  test that runs after one which styled the UI sees the styles the other test
-  left behind. Only the second and later runs of a `-count=N` are affected, so
-  CI never sees it, but it does mean `-count=N` is not a usable flakiness check
-  for this package. Predates this effort, and the same globals are why the tests
-  added for step 7 stop their pagers when they are done.
-
 ## Known residue after all of this
 
 Input that is short but dribbles in over longer than the grace period will

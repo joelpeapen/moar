@@ -75,7 +75,7 @@ func TestFgColorRendering(t *testing.T) {
 
 func TestPageEmpty(t *testing.T) {
 	// "---" is the eofSpinner of pager.go
-	assert.Equal(t, "---", renderTextLine(""))
+	assert.Equal(t, "---", renderTextLine(t, ""))
 }
 
 func TestBrokenUtf8(t *testing.T) {
@@ -113,6 +113,8 @@ func startPagingWithScreen(t *testing.T, screen *twin.FakeScreen, reader *reader
 }
 
 func startPagingWithTabSizeAndScreen(t *testing.T, tabSize int, screen *twin.FakeScreen, reader *reader.ReaderImpl) *twin.FakeScreen {
+	isolateStyles(t)
+
 	err := reader.Wait()
 	if err != nil {
 		t.Fatalf("Failed waiting for reader: %v", err)
@@ -137,6 +139,8 @@ func startPagingWithTabSizeAndScreen(t *testing.T, tabSize int, screen *twin.Fak
 
 // Set style to "native" and use the TTY16m formatter
 func startPagingWithTerminalFg(t *testing.T, reader *reader.ReaderImpl, withTerminalFg bool) *twin.FakeScreen {
+	isolateStyles(t)
+
 	err := reader.Wait()
 	if err != nil {
 		t.Fatalf("Failed waiting for reader: %v", err)
@@ -164,6 +168,8 @@ func startPagingWithTerminalFg(t *testing.T, reader *reader.ReaderImpl, withTerm
 // the last redraw are reflected in its output. --quit-if-one-screen relies on
 // this for turning line numbers off on its way out.
 func TestReprintAfterExitUsesCurrentSettings(t *testing.T) {
+	isolateStyles(t)
+
 	reader := reader.NewFromTextForTesting("", "hello")
 	assert.NilError(t, reader.Wait())
 
@@ -370,6 +376,8 @@ func TestManPageFormatting(t *testing.T) {
 }
 
 func TestScrollToBottomWrapNextToLastLine(t *testing.T) {
+	isolateStyles(t)
+
 	reader := reader.NewFromTextForTesting("",
 		"first line\nline two will be wrapped\nhere's the last line")
 
@@ -409,6 +417,8 @@ func TestScrollToBottomWrapNextToLastLine(t *testing.T) {
 
 // Repro for https://github.com/walles/moor/issues/105
 func TestScrollToEndLongInput(t *testing.T) {
+	isolateStyles(t)
+
 	const lineCount = 10100 // At least five digits
 
 	// "X" marks the spot
@@ -545,6 +555,8 @@ func getTestFiles(t *testing.T) []string {
 func TestPageSamples(t *testing.T) {
 	for _, fileName := range getTestFiles(t) {
 		t.Run(fileName, func(t *testing.T) {
+			isolateStyles(t)
+
 			file, err := os.Open(fileName)
 			if err != nil {
 				t.Errorf("Error opening file <%s>: %s", fileName, err.Error())
@@ -624,6 +636,8 @@ func TestClearToEndOfLine_ClearFromNotStart(t *testing.T) {
 
 // Validate rendering of https://en.wikipedia.org/wiki/ANSI_escape_code#EL
 func TestClearToEndOfLine_ClearFromStartScrolledRight(t *testing.T) {
+	isolateStyles(t)
+
 	pager := NewPager(reader.NewFromTextForTesting("TestClearToEol", blueBackgroundClearToEol0))
 	pager.ShowLineNumbers = false
 	pager.showLineNumbers = false
@@ -654,9 +668,9 @@ func TestClearToEndOfLine_ClearFromStartScrolledRight(t *testing.T) {
 }
 
 // Render a line of text on our 20 cell wide screen
-func renderTextLine(text string) string {
+func renderTextLine(t *testing.T, text string) string {
 	reader := reader.NewFromTextForTesting("renderTextLine", text)
-	screen := startPaging(nil, reader)
+	screen := startPaging(t, reader)
 	return rowToString(screen.GetRow(0))
 }
 
@@ -671,13 +685,13 @@ func TestPageWideChars(t *testing.T) {
 
 	// Cut the line in the middle of a wide character
 	const monospaced18cells = monospaced16cells + "上"
-	assert.Equal(t, monospaced18cells+" >", renderTextLine(monospaced24cells))
+	assert.Equal(t, monospaced18cells+" >", renderTextLine(t, monospaced24cells))
 
 	// Just the right length, no cutting
-	assert.Equal(t, monospaced20cells, renderTextLine(monospaced20cells))
+	assert.Equal(t, monospaced20cells, renderTextLine(t, monospaced20cells))
 
 	// Cut this line after a whide character
-	assert.Equal(t, "x"+monospaced18cells+">", renderTextLine("x"+monospaced24cells))
+	assert.Equal(t, "x"+monospaced18cells+">", renderTextLine(t, "x"+monospaced24cells))
 }
 
 func TestTerminalFg(t *testing.T) {

@@ -24,9 +24,20 @@ const (
 var UnprintableStyle UnprintableStyleT
 
 // These three styles will be configured from styling.go
-var ManPageBold = twin.StyleDefault.WithAttr(twin.AttrBold)
-var ManPageUnderline = twin.StyleDefault.WithAttr(twin.AttrUnderline)
-var ManPageHeading = twin.StyleDefault.WithAttr(twin.AttrBold)
+var ManPageBold, ManPageUnderline, ManPageHeading = manPageStyleDefaults()
+
+// The man page styles moor uses before styling.go has had its say.
+func manPageStyleDefaults() (bold twin.Style, underline twin.Style, heading twin.Style) {
+	return twin.StyleDefault.WithAttr(twin.AttrBold),
+		twin.StyleDefault.WithAttr(twin.AttrUnderline),
+		twin.StyleDefault.WithAttr(twin.AttrBold)
+}
+
+// ResetManPageStyles restores the man page styles to their defaults. Meant for
+// tests that change them, so that they don't leak into other tests.
+func ResetManPageStyles() {
+	ManPageBold, ManPageUnderline, ManPageHeading = manPageStyleDefaults()
+}
 
 // This is what less (version 581.2 on macOS) defaults to
 var TabSize = 8

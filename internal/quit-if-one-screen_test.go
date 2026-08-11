@@ -59,9 +59,10 @@ func (screen *countingScreen) Show() {
 //
 // Stopping matters even for tests that expect the pager to quit on its own: a
 // pager left running keeps painting on its spinner ticks for as long as the test
-// binary lives, and it shares package level style state with the next test.
+// binary lives.
 func startPagingInBackground(t *testing.T, pager *Pager, screen *countingScreen) chan struct{} {
 	t.Helper()
+	isolateStyles(t)
 
 	pagingDone := make(chan struct{})
 	go func() {

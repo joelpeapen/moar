@@ -90,7 +90,7 @@ func (b *InputBox) draw(screen twin.Screen, keys_help string, prompt string) {
 			for _, cell := range renderedHelp {
 				pos += screen.SetCell(pos, height-1, cell)
 			}
-			screen.SetCell(pos, height-1, twin.NewStyledRune(' ', statusbarStyle))
+			screen.SetCell(pos, height-1, twin.NewStyledRune(' ', theme.statusbar))
 		}
 	}
 }
