@@ -156,7 +156,22 @@ func newReaderFromStream(reader io.Reader, originalFileName *string, formatter c
 
 	go func() {
 		defer func() {
-			PanicHandler("newReaderFromStream()/readStream()", recover(), debug.Stack())
+			panicResult := recover()
+			PanicHandler("newReaderFromStream()/readStream()", panicResult, debug.Stack())
+			if panicResult == nil {
+				return
+			}
+
+			// Whatever we got before the panic is all there is ever going to be,
+			// so say we're done. Otherwise everybody waiting for us waits
+			// forever: the pager holds its first paint until highlighting is
+			// done, and it spins its spinner until reading is.
+			returnMe.ReadingDone.Store(true)
+			returnMe.HighlightingDone.Store(true)
+			select {
+			case returnMe.MaybeDone <- true:
+			default:
+			}
 		}()
 
 		returnMe.readStream(reader, formatter, options)

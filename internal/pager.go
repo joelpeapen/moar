@@ -56,8 +56,16 @@ type Pager struct {
 	// A view of the current reader, possibly filtered
 	filteringReader FilteringReader
 
-	screen         twin.Screen
-	quit           bool
+	screen twin.Screen
+	quit   bool
+
+	// Set once the user has pressed a key or used the mouse. Until then, and only
+	// while --quit-if-one-screen might still make us quit, we are allowed to
+	// paint nothing at all. Somebody who is interacting wants to see something.
+	//
+	// Written and read only by the main loop, like quit above, so no locking.
+	sawUserInput bool
+
 	scrollPosition scrollPosition
 
 	// How far right we have scrolled horizontally. The unit is visual screen
@@ -522,6 +530,17 @@ func (p *Pager) setTargetLine(targetLine *linemetadata.Index) {
 	r.SetPauseAfterLines(targetValue)
 }
 
+// True for events that mean the user did something, as opposed to us or the
+// reader making progress on our own.
+func isUserInput(event twin.Event) bool {
+	switch event.(type) {
+	case twin.EventKeyCode, twin.EventRune, twin.EventMouse:
+		return true
+	}
+
+	return false
+}
+
 // StartPaging brings up the pager on screen
 func (p *Pager) StartPaging(screen twin.Screen, chromaStyle *chroma.Style, chromaFormatter *chroma.Formatter) {
 	log.Info("Pager starting")
@@ -649,49 +668,60 @@ func (p *Pager) StartPaging(screen twin.Screen, chromaStyle *chroma.Style, chrom
 	// Main loop
 	spinner := ""
 	for !p.quit {
-		// Nothing more to process for now, so decide whether to quit, and redraw
-		// if we're staying. Deciding first is what keeps a quit-if-one-screen
-		// exit off the alternate screen: the redraw is what takes us there, and
-		// on the way out we never get that far.
 		if len(screen.Events()) == 0 {
+			// Nothing more to process for now, so decide whether to quit, and redraw
+			// if we're staying. Deciding first is what keeps a quit-if-one-screen
+			// exit off the alternate screen: the redraw is what takes us there, and
+			// on the way out we never get that far.
+
 			p.readerLock.Lock()
 			r := p.readers[p.currentReader]
 			p.readerLock.Unlock()
 
-			// Ref:
-			// https://github.com/gwsw/less/blob/ff8869aa0485f7188d942723c9fb50afb1892e62/command.c#L828-L831
-			//
-			// Note that we do the slow (atomic) checks only if the fast ones
-			// (no locking required) passed.
-			//
-			// Also, we only do this if we have exactly one reader, because
-			// that's what less does.
-			if len(p.readers) == 1 && p.QuitIfOneScreen && !p.isShowingHelp && r.ReadingDone.Load() && r.HighlightingDone.Load() {
-				if p.fitsOnOneScreen() {
-					// Leave the contents on the user's own screen, looking
-					// like cat printed them rather than like a pager did.
-					// DeInit false is what makes our caller call
-					// ReprintAfterExit(), and ReprintAfterExit() renders
-					// after we're done here, so it will pick up the line
-					// numbers setting.
-					//
-					// Ref:
-					// https://github.com/walles/moor/issues/113#issuecomment-1368294132
-					p.showLineNumbers = false
-					p.DeInit = false
-					p.quit = true
+			// Read this before looking at the contents, never after: highlighting
+			// replaces the lines and then sets the flag, so a flag we saw first
+			// means the lines we go on to count are the highlighted ones.
+			highlightingDone := r.HighlightingDone.Load()
 
-					log.Info("Exiting because of --quit-if-one-screen, everything fit on one screen and we're done")
+			canQuit := p.canQuitIfOneScreen(r)
 
-					// Exit the main loop
-					break
-				}
+			if canQuit && highlightingDone {
+				// Leave the contents on the user's own screen, looking like cat
+				// printed them.
+				//
+				// Ref:
+				// https://github.com/walles/moor/issues/113#issuecomment-1368294132
+				p.showLineNumbers = false // cat does no line numbers, so we shouldn't either
+				p.DeInit = false          // Makes ReprintAfterExit() be called on the way out
+				p.quit = true
+
+				log.Info("Exiting because of --quit-if-one-screen, everything fit on one screen and we're done")
+
+				// Exit the main loop
+				break
 			}
 
-			p.redraw(spinner)
+			// Highlighting can still grow the contents past one screen, so we
+			// don't know yet whether we are staying. Painting now and quitting
+			// right after is the blink of issue #425, so paint nothing and let
+			// the event read below wait for highlighting instead: it signals
+			// MaybeDone when it lands.
+			//
+			// Somebody who is interacting gets painted for regardless, which
+			// also means a reader that never finishes highlighting costs them a
+			// keypress rather than the whole session.
+			holdPaint := canQuit && !p.sawUserInput
+			if !holdPaint {
+				p.redraw(spinner)
+			}
 		}
 
 		event := <-screen.Events()
+
+		if isUserInput(event) {
+			p.sawUserInput = true
+		}
+
 		switch event := event.(type) {
 		case twin.EventKeyCode:
 			log.Tracef("Handling key event %d...", event.KeyCode())
@@ -797,6 +827,33 @@ func (p *Pager) fitsOnOneScreenWrapped() bool {
 	rendered := fakePager.renderLines()
 
 	return len(rendered.lines) < testScreenHeight
+}
+
+// True if --quit-if-one-screen is about to make us quit, or would be if
+// highlighting were done.
+//
+// Highlighting is deliberately not part of this: it is the one thing that can
+// still flip the answer, by reformatting the contents into more lines than fit,
+// and the caller needs to tell "no" apart from "not yet".
+//
+// Ref:
+// https://github.com/gwsw/less/blob/ff8869aa0485f7188d942723c9fb50afb1892e62/command.c#L828-L831
+func (p *Pager) canQuitIfOneScreen(r *reader.ReaderImpl) bool {
+	// Only with exactly one reader, because that's what less does
+	if len(p.readers) != 1 {
+		return false
+	}
+
+	if !p.QuitIfOneScreen || p.isShowingHelp {
+		return false
+	}
+
+	if !r.ReadingDone.Load() {
+		return false
+	}
+
+	// Counting the lines is the expensive part, so it goes last
+	return p.fitsOnOneScreen()
 }
 
 func (p *Pager) fitsOnOneScreen() bool {

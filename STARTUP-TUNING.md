@@ -172,7 +172,7 @@ One branch per step, each merged into master separately.
       colored line makes it obvious, which is what
       `TestReprintEndsWithStyleReset` pages.
 
-- [ ] **7. Close the highlighting race for file arguments.**
+- [x] **7. Close the highlighting race.**
       `moor --quit-if-one-screen foo.go` still blinks, measured 7/15 on a 20
       line `.go` file. `HighlightingDone` is only preset at construction when
       there is no lexer (`internal/reader/constructors.go:56-58`), which is why
@@ -181,27 +181,85 @@ One branch per step, each merged into master separately.
       `cmd/moor/moor.go:602`, a few hundred microseconds before the main loop
       starts, and then loses the race about half the time. The margin is
       30-370 µs.
+      Pipes are in scope too, not just file arguments: `NewFromStream`
+      (`internal/reader/constructors.go:80-98`) doesn't preset
+      `HighlightingDone` either. Piped plain text only wins the race because
+      `highlightFromMemory` bails out early
+      (`internal/reader/highlight.go:144-155`). Piped JSON, and anything
+      `enry.GetLanguage()` classifies, race exactly like a `.go` file argument.
       This one needs no invented number, which is why it is not part of step 8:
-      waiting for `HighlightingDone` when the decision is otherwise ready would
-      be deterministic. But highlighting covers the whole input, not just the
-      part that would fit, so the wait needs a `GetLineCount() > height` gate in
-      front of it or a huge file stalls the first paint. That gate lives here,
-      and step 8 reuses it.
-      A gate on the pre-highlighting line count is safe in both directions.
-      Highlighting can only make the count grow (`ShouldFormat` reformats JSON),
-      so anything already too tall to fit stays too tall, and anything short
-      enough to pass the gate is small enough that waiting for it is cheap.
+      the decision is otherwise ready, so all that is missing is holding the
+      first paint until highlighting lands. Don't block the main loop waiting
+      for it. Skip the `p.redraw()` instead and fall through to
+      `event := <-screen.Events()`: `HighlightingDone.Store(true)` is followed
+      by a `MaybeDone` signal (`internal/reader/consumer.go:42-46`), the
+      goroutine at `internal/pager.go:641-643` turns that into an event, and
+      both channels are buffered so the wakeup cannot be dropped. Keys stay live
+      and the reader needs no new API. Re-evaluate every lap rather than holding
+      exactly one frame: `highlightFromMemory` signals `MoreLinesAdded` before
+      `HighlightingDone`, so waking up with highlighting still pending is
+      normal.
+      The gate is `p.fitsOnOneScreen()` itself: hold only when the decision
+      would otherwise have said yes and highlighting is the one thing left. It
+      is already the inner test at `internal/pager.go:670`, so this is a swap,
+      moving it out into the outer condition and leaving `HighlightingDone`
+      inside. That adds no new predicate, where the `GetLineCount() > height`
+      gate this step first called for would have inlined a copy of
+      `fitsOnOneScreen()`'s own first lines (`internal/pager.go:819-821`),
+      giving two places to drift apart. Extract the whole condition as
+      `shouldHoldFirstPaint()`; step 8 reuses it and wants one place to extend.
+      Highlighting completing is not actually guaranteed: a panic in the reader
+      goroutine is only logged (`internal/reader/panicHandler.go:9-18`), leaving
+      `HighlightingDone` false forever. So add a `sawUserInput` flag, set in the
+      key/rune/mouse cases at `internal/pager.go:696-705`, and never hold once
+      it is set. That bounds a panicked reader to a blank screen until the user
+      touches something rather than a hang, and step 8 wants the same condition
+      anyway. Worth a separate commit: have the deferred handler at
+      `internal/reader/constructors.go:157-163` mark reading and highlighting
+      done, which also fixes the forever-spinning spinner a panic leaves behind.
       `MOOR=--quit-if-one-screen` plus a source file is a mainstream invocation,
       so this is the more valuable of the two remaining steps.
       Note that `p.redraw()` is unconditional once the check declines, so
-      nothing currently holds the first paint back.
+      nothing currently holds the first paint back. Both it and the check sit
+      inside `if len(screen.Events()) == 0` (`internal/pager.go:656`), which is
+      another reason the hold is a skipped redraw rather than a wait: a blocking
+      wait would sit inside a block we may not even enter.
+      A reload cannot un-set `HighlightingDone` under us during startup.
+      `reloadFromFile` (`internal/reader/watcher.go:54-55`) is the only place
+      that clears it, its only caller is the tailing loop, and `readStream`
+      starts that loop only after highlighting has finished once
+      (`internal/reader/consumer.go:50`) and it sleeps a second before its first
+      poll (`internal/reader/watcher.go:303-307`).
+      Branch: `hold-first-paint-for-highlighting`. Measured with the pty harness
+      on a 20 line `.go` file, 15 runs each: 5/15 alternate screen entries
+      before, 0/15 after.
+      The predicate ended up named `canQuitIfOneScreen()` rather than
+      `shouldHoldFirstPaint()`, because the quit branch needs the same answer
+      and only the hold cares about `sawUserInput`. Holding is then a two line
+      `holdPaint := canQuit && !p.sawUserInput` at the call site. Step 8 wants
+      the hold without `canQuitIfOneScreen()`'s `ReadingDone` requirement, so it
+      will have to split the predicate rather than just reuse it.
+      Read `HighlightingDone` *before* counting the lines, never after.
+      Highlighting replaces the lines and only then sets the flag, so a flag
+      read first means the lines counted afterwards are the highlighted ones.
+      The other order can quit on a pre-highlighting count that highlighting
+      already invalidated, which with `--reformat` means a truncated file on
+      screen and exit code 0.
+      The reader hardening this step listed as optional turned out to be
+      required, and landed here rather than being deferred: with the hold in
+      place, a panic while highlighting means moor paints *nothing* until a
+      keypress, which is worse than the spinning spinner it used to mean.
 
 - [ ] **8. Grace deadline for slow producers.**
       Short input that dribbles in over longer than the accidental window
       described under "Known residue" still flashes. Hold the first paint until
       reading finishes, a key or mouse event arrives, or a deadline of
-      ~50-100 ms expires, behind step 7's `GetLineCount() > height` gate so that
-      large inputs never wait.
+      ~50-100 ms expires. Split step 7's `canQuitIfOneScreen()` so the hold gets
+      the same checks without its `ReadingDone` requirement, and large inputs
+      still never wait: the `fitsOnOneScreen()` part releases the hold by itself
+      as soon as the growing input outgrows a screen, and the deadline then never
+      matters. `sawUserInput` from step 7 is the "or a key or mouse event
+      arrives" half, already done.
       The numbers under "Known residue" are the input to picking the deadline.
       Deliberately parked: unlike every other step, this one requires somebody
       to choose a timeout, and it only buys the case where the producer is slow
@@ -231,6 +289,30 @@ not a reason to keep this file around.
   `--no-clear-on-exit-margin 0`, and quietly through `pkg/moor`, which sets
   `QuitIfOneScreen` but never `DeInitFalseMargin`.
 
+- **`FakeScreen.RequestTerminalBackgroundColor()` is dead code.**
+  `twin/fake-screen.go:104`. It is not part of the `Screen` interface, no
+  `UnixScreen` counterpart exists, and nothing calls it. Deletable as is.
+
+- **`go test -count=5 ./internal/` fails `TestSearchHighlight` 4 times out of
+  5.** `internal/screenLines_test.go:126`. The package level style variables in
+  `internal/styling.go:15-29` are set up by `styleUI()` and never reset, so a
+  test that runs after one which styled the UI sees the styles the other test
+  left behind. Only the second and later runs of a `-count=N` are affected, so
+  CI never sees it, but it does mean `-count=N` is not a usable flakiness check
+  for this package. Predates this effort, and the same globals are why the tests
+  added for step 7 stop their pagers when they are done.
+
+- **`FakeScreen.Events()` returns nil, with a `TODO` on it.**
+  `twin/fake-screen.go:112-115`. `<-nil` blocks forever, so no test using a
+  plain `FakeScreen` can run the pager main loop, which is a large hole given
+  how many tests use it. Step 7 sidesteps it with a local screen double
+  embedding `*twin.FakeScreen`, rather than fixing it, because handing
+  `FakeScreen` a real channel changes behavior under every existing user at
+  once: the goroutine at `internal/pager.go:641-643` does an unguarded
+  `screen.Events() <- eventMaybeDone{}`, which parks forever on today's nil
+  channel and would start filling a buffer instead. Worth doing properly if a
+  second test wants the main loop.
+
 ## Known residue after all of this
 
 Input that is short but dribbles in over longer than the grace period will
@@ -252,13 +334,25 @@ what pads the other column. Both numbers move with machine speed, and an earlier
 sweep on a busier machine put the answering column's edge closer to 40 ms. An
 explicit deadline would at least be a number somebody chose.
 
+Step 7's `fitsOnOneScreen()` gate looks at un-highlighted content, and
+highlighting can in one case make content *start* fitting: `--reformat` plus a
+single long JSON line that expands into a screenful. That input fails the gate,
+so it keeps its blink. `--reformat` is off by default
+(`cmd/moor/moor.go:397`).
+
 ## Test notes
 
 - `test.sh:104-105` runs `echo "  (success)" | ./moor --quit-if-one-screen` on
   a real TTY. That is the output-correctness contract to preserve.
 - `internal/pager_test.go` calls `Quit()` before `StartPaging`, so the main
   loop body never runs there. Steps 5, 7 and 8 do not disturb those tests,
-  which also means they will not catch regressions in them.
+  which also means they will not catch regressions in them. It couldn't run the
+  loop even without the `Quit()`: `twin.FakeScreen.Events()` returns nil
+  (`twin/fake-screen.go:112-115`) and `<-nil` blocks forever. A test that wants
+  the loop needs a screen double embedding `*twin.FakeScreen` with a real events
+  channel, which also gives it somewhere to count `Show()` calls. Embed
+  `*twin.FakeScreen`, pointer included, since its methods are all on pointer
+  receivers.
 - Many tests use `twin.NewFakeScreen`, so any new `Screen` interface method
   needs a no-op there.
 - `cmd/moor/moor_test.go` injects a fake `newScreen` into `pagerFromArgs`,
@@ -303,4 +397,22 @@ explicit deadline would at least be a number somebody chose.
 - Every pty test so far pages input chroma does not highlight, `.txt` files and
   unclassifiable piped text, which is the only reason they are not flaky. Any
   test of the startup path wanting the *highlighted* case needs a file argument
-  with a real extension, and will fail until step 7 lands.
+  with a real extension, or piped JSON. Such a test cannot look for a multi-word
+  phrase in the captured output, chroma puts SGR sequences between the tokens;
+  assert on a single identifier instead.
+- Step 7's tests are `internal/quit-if-one-screen_test.go` for the contract and
+  `TestQuitIfOneScreenNeverEntersAlternateScreenWhenHighlighted` in
+  `cmd/moor/alt-screen_test.go` for the end to end net. The pty one caught the
+  blink 4 times in 20 pre-step-7 subtest runs, so it is a net and not a
+  reproducer; the deterministic reproducer is the pager level one.
+- Size the input for a pty test of the highlighting race. Four lines of Go are
+  highlighted before the pager even starts, so such a test passes with or without
+  step 7. Twenty dense lines lose the race often enough to be worth having, and
+  still fit on the harness' 24 line screen. Time-sensitive either way: it is
+  measuring a margin of tens of microseconds.
+- The pager main loop cannot be run with a plain `twin.FakeScreen`, see the
+  `Events()` item under Deferred. `internal/quit-if-one-screen_test.go` has a
+  screen double that can, counts `Show()` calls, and uses sends on an unbuffered
+  event channel as handshakes with the main loop so that nothing has to sleep.
+  Ask it whether it painted *before* handing it an event it reacts to: the answer
+  is read once the pager is free to run on, so a later lap's paint lands in it.

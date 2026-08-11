@@ -334,6 +334,44 @@ func textLines(lineCount int) string {
 // Creates a file with the requested number of lines, and returns its path. The
 // contents are the same as textLines() would give you, so that a test can page
 // the same text from a file and from a pipe.
+// Creates a Go source file with the requested number of lines, and returns its
+// path. Its extension is what gets it a chroma lexer, which is what makes moor
+// highlight it.
+//
+// The identifier goes into every line, for tests to look for in moor's output.
+// Keep it a single identifier: highlighting puts escape sequences between
+// tokens, so a phrase would not survive as one string.
+//
+// Ask for enough lines to be worth highlighting. A handful of lines are
+// highlighted before the pager even starts, which hides anything that depends on
+// highlighting still being underway.
+func createSourceFile(t *testing.T, lineCount int, identifier string) string {
+	t.Helper()
+
+	contents := strings.Builder{}
+	contents.WriteString("package main\n\nimport \"fmt\"\n\n")
+	// Two lines per iteration, after the four line header
+	for i := 1; i <= (lineCount-4)/2; i++ {
+		fmt.Fprintf(&contents, "// Comment number %d\nfunc %s%d() { fmt.Println(%d) }\n", i, identifier, i, i)
+	}
+
+	path := filepath.Join(t.TempDir(), "hello.go")
+	assert.NilError(t, os.WriteFile(path, []byte(contents.String()), 0o600))
+
+	return path
+}
+
+// Lines of JSON, which is highlighted based on its contents rather than on any
+// file name. Same identifier rules as createSourceFile().
+func jsonLines(lineCount int, identifier string) string {
+	contents := strings.Builder{}
+	for i := 1; i <= lineCount; i++ {
+		fmt.Fprintf(&contents, "{\"%s\": %d}\n", identifier, i)
+	}
+
+	return contents.String()
+}
+
 func createTextFile(t *testing.T, lineCount int) string {
 	t.Helper()
 
