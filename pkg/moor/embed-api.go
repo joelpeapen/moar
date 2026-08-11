@@ -176,12 +176,29 @@ func pageFromReader(reader *internalReader.ReaderImpl, options Options) error {
 
 	formatter := getColorFormatter()
 
-	pager.StartPaging(screen, &style, &formatter)
-	screen.Close()
+	defer func() {
+		panicMessage := recover()
+		if panicMessage != nil {
+			// Clarify that any screen shutdown logs are from panic handling,
+			// not something the user or some external thing did.
+			log.Info("Panic detected, closing screen before informing the user...")
+		}
 
-	if !pager.DeInit {
-		pager.ReprintAfterExit()
-	}
+		// Restore screen...
+		screen.Close()
+
+		// ... before printing any panic() output, otherwise the output will
+		// have broken linefeeds and be hard to follow.
+		if panicMessage != nil {
+			panic(panicMessage)
+		}
+
+		if !pager.DeInit {
+			pager.ReprintAfterExit()
+		}
+	}()
+
+	pager.StartPaging(screen, &style, &formatter)
 
 	return nil
 }

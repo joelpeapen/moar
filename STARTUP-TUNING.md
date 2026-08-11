@@ -273,16 +273,6 @@ step 5, and are independent of each other.
 Found while working on the above, unrelated to the blink. Not scheduled, and
 not a reason to keep this file around.
 
-- **`pkg/moor` leaves the terminal wrecked if paging panics.**
-  `pageFromReader()` (`pkg/moor/embed-api.go`) calls `screen.Close()`
-  undeferred and with no `recover()`, so a panic in `StartPaging()` leaves the
-  embedding process on the alternate screen in raw mode. `cmd/moor/moor.go`
-  gets this right, in a deferred function that closes the screen, re-panics if
-  there was a panic, and reprints otherwise. Note that the fix is not a plain
-  `defer screen.Close()`: `ReprintAfterExit()` has to run after the close, so
-  it takes the same shape as the one in `moor.go`. Don't end up with two
-  `Close()` calls, it is not written to be idempotent.
-
 - **`--quit-if-one-screen` can drop the last line when `DeInitFalseMargin` is
   0.** `fitsOnOneScreen()` accepts `GetLineCount() == screenHeight` while
   `renderLines()` caps at `screenHeight - 1`. Reachable with
