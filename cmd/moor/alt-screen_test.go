@@ -145,3 +145,51 @@ func TestQuitIfOneScreenNeverEntersAlternateScreen(t *testing.T) {
 		}
 	}
 }
+
+// Input that gets highlighted has to stay off the alternate screen too.
+//
+// Highlighting can turn contents that fit into contents that don't, so moor
+// cannot know whether it is quitting until highlighting is done. It has to wait
+// without painting: `MOOR=--quit-if-one-screen` plus a source file is a
+// mainstream invocation, and it flashed for as long as issue #425 was open.
+func TestQuitIfOneScreenNeverEntersAlternateScreenWhenHighlighted(t *testing.T) {
+	for _, answerBackgroundQuery := range []bool{true, false} {
+		for _, fromPipe := range []bool{false, true} {
+			name := fmt.Sprintf("answerBackgroundQuery=%t/fromPipe=%t", answerBackgroundQuery, fromPipe)
+			t.Run(name, func(t *testing.T) {
+				// One identifier, because highlighting would put escape
+				// sequences inside a phrase
+				marker := "hello_world"
+
+				// Enough lines that highlighting is still going when the pager
+				// starts, few enough that they fit on our 24 line screen
+				lineCount := 20
+
+				options := moorOptions{
+					answerBackgroundQuery: answerBackgroundQuery,
+					args:                  []string{"--quit-if-one-screen"},
+				}
+				if fromPipe {
+					lines := jsonLines(lineCount, marker)
+					options.stdin = &lines
+				} else {
+					options.args = append(options.args, createSourceFile(t, lineCount, marker))
+				}
+
+				session := startMoor(t, options)
+				session.wait(t)
+
+				captured := session.captured()
+
+				// Without this a moor that printed nothing at all would pass
+				assert.Assert(t, strings.Contains(captured, marker),
+					"Never printed the contents:\n%s", humanizeEscapes(captured))
+
+				assert.Assert(t, !strings.Contains(captured, altScreenEnter),
+					"Entered the alternate screen:\n%s", humanizeEscapes(captured))
+				assert.Assert(t, !strings.Contains(captured, altScreenLeave),
+					"Left the alternate screen:\n%s", humanizeEscapes(captured))
+			})
+		}
+	}
+}
