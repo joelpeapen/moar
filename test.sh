@@ -127,5 +127,12 @@ diff -u <(echo "${MAN_OPTIONS}") <(echo "${MOOR_OPTIONS}")
 
 ./scripts/test-path-help.sh "$(realpath ./moor)"
 
+if ls moor-race-report.* 1> /dev/null 2>&1; then
+  echo
+  echo "ERROR: Please check RACES.md and look into the following files:"
+  ls moor-race-report.*
+  exit 1
+fi
+
 echo
 echo "All tests passed!"
