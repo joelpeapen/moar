@@ -115,11 +115,6 @@ func (b *InputBox) handleRune(char rune) bool {
 		b.moveCursorHome()
 		return true
 	}
-	if char == '0' {
-		// 0, move cursor to start (like vim)
-		b.moveCursorHome()
-		return true
-	}
 	if char == '\x05' {
 		// Ctrl-E, move cursor to end
 		b.moveCursorEnd()
