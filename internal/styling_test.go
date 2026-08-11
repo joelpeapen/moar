@@ -41,11 +41,15 @@ func TestSetStyle(t *testing.T) {
 //
 // We used to crash doing this.
 func TestConfigureHighlighting_No24BitColors(t *testing.T) {
-	searchHitStyle = twin.StyleDefault.WithForeground(twin.NewColor16(3))
+	isolateStyles(t)
+
+	theme.searchHit = twin.StyleDefault.WithForeground(twin.NewColor16(3))
 	configureHighlighting(nil, true)
 }
 
 func TestLessTermcapMdControlsBothBoldAndHeadings(t *testing.T) {
+	isolateStyles(t)
+
 	// Bold red
 	assert.NilError(t, os.Setenv("LESS_TERMCAP_md", "\x1b[1;31m"))
 	t.Cleanup(func() { _ = os.Unsetenv("LESS_TERMCAP_md") })

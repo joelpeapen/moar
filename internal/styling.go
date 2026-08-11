@@ -11,22 +11,37 @@ import (
 	"github.com/walles/moor/v2/twin"
 )
 
-// From LESS_TERMCAP_so, overrides statusbarStyle from the Chroma style if set
-var standoutStyle *twin.Style
+// How the moor UI is styled. Set up by styleUI().
+type uiStyles struct {
+	plainText   twin.Style
+	lineNumbers twin.Style
 
-var lineNumbersStyle = twin.StyleDefault.WithAttr(twin.AttrDim)
+	// Status bar and EOF marker style
+	statusbar     twin.Style
+	statusbarFile twin.Style
 
-// Status bar and EOF marker style
-var statusbarStyle = twin.StyleDefault.WithAttr(twin.AttrReverse)
+	searchHit twin.Style
 
-var statusbarFileStyle = twin.StyleDefault.WithAttr(twin.AttrReverse).WithAttr(twin.AttrUnderline)
+	// From LESS_TERMCAP_so, overrides statusbar from the Chroma style if set.
+	// This can be nil.
+	standout *twin.Style
 
-var plainTextStyle = twin.StyleDefault
+	// Background color for lines containing search hits. This can be nil.
+	searchHitLineBackground *twin.Color
+}
 
-var searchHitStyle = twin.StyleDefault.WithAttr(twin.AttrReverse)
+// The styles moor uses before styleUI() has had its say.
+func defaultUiStyles() uiStyles {
+	return uiStyles{
+		plainText:     twin.StyleDefault,
+		lineNumbers:   twin.StyleDefault.WithAttr(twin.AttrDim),
+		statusbar:     twin.StyleDefault.WithAttr(twin.AttrReverse),
+		statusbarFile: twin.StyleDefault.WithAttr(twin.AttrReverse).WithAttr(twin.AttrUnderline),
+		searchHit:     twin.StyleDefault.WithAttr(twin.AttrReverse),
+	}
+}
 
-// This can be nil
-var searchHitLineBackground *twin.Color
+var theme = defaultUiStyles()
 
 func setStyle(updateMe *twin.Style, envVarName string, fallback *twin.Style) {
 	envValue := os.Getenv(envVarName)
@@ -112,7 +127,7 @@ func consumeLessTermcapEnvs(terminalBackground *twin.Color, chromaStyle *chroma.
 		twinStyleFromChroma(terminalBackground, chromaStyle, chromaFormatter, chroma.GenericUnderline, false),
 	)
 
-	// Since standoutStyle defaults to nil we can't just pass it to setStyle().
+	// Since theme.standout defaults to nil we can't just pass it to setStyle().
 	// Instead we give it special treatment here and set it only if its
 	// environment variable is set.
 	//
@@ -122,7 +137,7 @@ func consumeLessTermcapEnvs(terminalBackground *twin.Color, chromaStyle *chroma.
 		style, err := TermcapToStyle(envValue)
 		if err == nil {
 			log.Trace("Standout style set from LESS_TERMCAP_so: ", style)
-			standoutStyle = &style
+			theme.standout = &style
 		} else {
 			log.Info("Ignoring invalid LESS_TERMCAP_so: ", strings.ReplaceAll(envValue, "\x1b", "ESC"), ": ", err)
 		}
@@ -147,8 +162,8 @@ func getOppositeColor(base twin.Color) twin.Color {
 
 func styleUI(terminalBackground *twin.Color, chromaStyle *chroma.Style, chromaFormatter *chroma.Formatter, statusbarOption StatusBarOption, withTerminalFg bool, configureSearchHitLineBackground bool) {
 	// Set defaults
-	plainTextStyle = twin.StyleDefault
-	lineNumbersStyle = twin.StyleDefault.WithAttr(twin.AttrDim)
+	theme.plainText = twin.StyleDefault
+	theme.lineNumbers = twin.StyleDefault.WithAttr(twin.AttrDim)
 
 	if chromaStyle == nil || chromaFormatter == nil {
 		return
@@ -160,39 +175,39 @@ func styleUI(terminalBackground *twin.Color, chromaStyle *chroma.Style, chromaFo
 		// to read. If line numbers should look some other way for some Chroma
 		// style, go fix that in Chroma!
 		log.Trace("Line numbers style set from Chroma: ", *chromaLineNumbers)
-		lineNumbersStyle = *chromaLineNumbers
+		theme.lineNumbers = *chromaLineNumbers
 	}
 
 	plainText := twinStyleFromChroma(terminalBackground, chromaStyle, chromaFormatter, chroma.None, false)
 	if plainText != nil && !withTerminalFg {
 		log.Trace("Plain text style set from Chroma: ", *plainText)
-		plainTextStyle = *plainText
+		theme.plainText = *plainText
 	}
 
-	if standoutStyle != nil {
-		log.Trace("Status bar style set from standout style: ", *standoutStyle)
-		statusbarStyle = *standoutStyle
+	if theme.standout != nil {
+		log.Trace("Status bar style set from standout style: ", *theme.standout)
+		theme.statusbar = *theme.standout
 	} else if statusbarOption == STATUSBAR_STYLE_INVERSE {
-		statusbarStyle = plainTextStyle.WithAttr(twin.AttrReverse)
+		theme.statusbar = theme.plainText.WithAttr(twin.AttrReverse)
 	} else if statusbarOption == STATUSBAR_STYLE_PLAIN {
 		plain := twinStyleFromChroma(terminalBackground, chromaStyle, chromaFormatter, chroma.None, false)
 		if plain != nil {
-			statusbarStyle = *plain
+			theme.statusbar = *plain
 		} else {
-			statusbarStyle = twin.StyleDefault
+			theme.statusbar = twin.StyleDefault
 		}
 	} else if statusbarOption == STATUSBAR_STYLE_BOLD {
 		bold := twinStyleFromChroma(terminalBackground, chromaStyle, chromaFormatter, chroma.GenericStrong, true)
 		if bold != nil {
-			statusbarStyle = *bold
+			theme.statusbar = *bold
 		} else {
-			statusbarStyle = twin.StyleDefault.WithAttr(twin.AttrBold)
+			theme.statusbar = twin.StyleDefault.WithAttr(twin.AttrBold)
 		}
 	} else {
 		panic(fmt.Sprint("Unrecognized status bar style: ", statusbarOption))
 	}
 
-	statusbarFileStyle = statusbarStyle.WithAttr(twin.AttrUnderline)
+	theme.statusbarFile = theme.statusbar.WithAttr(twin.AttrUnderline)
 
 	configureHighlighting(terminalBackground, configureSearchHitLineBackground)
 }
@@ -200,11 +215,11 @@ func styleUI(terminalBackground *twin.Color, chromaStyle *chroma.Style, chromaFo
 // Expects to be called from the end of styleUI(), since at that
 // point we should have all data we need to set up highlighting.
 func configureHighlighting(terminalBackground *twin.Color, configureSearchHitLineBackground bool) {
-	if standoutStyle != nil {
-		searchHitStyle = *standoutStyle
-		log.Trace("Search hit style set from standout style: ", searchHitStyle)
+	if theme.standout != nil {
+		theme.searchHit = *theme.standout
+		log.Trace("Search hit style set from standout style: ", theme.searchHit)
 	} else {
-		log.Trace("Search hit style set to default: ", searchHitStyle)
+		log.Trace("Search hit style set to default: ", theme.searchHit)
 	}
 
 	//
@@ -220,17 +235,17 @@ func configureHighlighting(terminalBackground *twin.Color, configureSearchHitLin
 	var plainBg twin.Color
 	if terminalBackground != nil {
 		plainBg = *terminalBackground
-	} else if plainTextStyle.HasAttr(twin.AttrReverse) {
-		plainBg = plainTextStyle.Foreground()
+	} else if theme.plainText.HasAttr(twin.AttrReverse) {
+		plainBg = theme.plainText.Foreground()
 	} else {
-		plainBg = plainTextStyle.Background()
+		plainBg = theme.plainText.Background()
 	}
 
-	hitBg := searchHitStyle.Background()
-	hitFg := searchHitStyle.Foreground()
-	if searchHitStyle.HasAttr(twin.AttrReverse) {
-		hitBg = searchHitStyle.Foreground()
-		hitFg = searchHitStyle.Background()
+	hitBg := theme.searchHit.Background()
+	hitFg := theme.searchHit.Foreground()
+	if theme.searchHit.HasAttr(twin.AttrReverse) {
+		hitBg = theme.searchHit.Foreground()
+		hitFg = theme.searchHit.Background()
 	}
 	if hitBg == twin.ColorDefault && hitFg != twin.ColorDefault {
 		// Not knowing the hit background color will be a problem further down
@@ -250,9 +265,9 @@ func configureHighlighting(terminalBackground *twin.Color, configureSearchHitLin
 		// We have two real colors. Mix them! I got to "0.2" by testing some
 		// numbers. 0.2 is visible but not too strong.
 		mixed := plainBg.Mix(hitBg, 0.2)
-		searchHitLineBackground = &mixed
+		theme.searchHitLineBackground = &mixed
 
-		log.Trace("Search hit line background set to mixed color: ", *searchHitLineBackground)
+		log.Trace("Search hit line background set to mixed color: ", *theme.searchHitLineBackground)
 	} else {
 		log.Debug("Cannot set search hit line background based on plainBg=", plainBg, " hitBg=", hitBg)
 	}

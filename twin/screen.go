@@ -53,11 +53,21 @@ type Screen interface {
 	// For out-of-bounds requests, a space with default style is returned.
 	GetCell(column int, row int) StyledRune
 
-	// Render our contents into the terminal window
+	// Render our contents into the terminal window.
+	//
+	// The first call takes over the terminal: alternate screen, cursor hidden,
+	// mouse tracked. Until then the user's own screen is left alone.
+	//
+	// Renders nothing while somebody else owns the terminal, meaning after
+	// Close() or during PauseAndCall(); Ctrl-Z handling makes that possible
+	// without your main loop asking for it.
 	Show()
 
 	// Can be called after Close()ing the screen to fake retaining its output.
 	// Plain Show() is what you'd call during normal operation.
+	//
+	// Unlike Show(), this one never takes over the terminal; it prints where
+	// the cursor already is.
 	ShowNLines(lineCountToShow int)
 
 	// Returns screen width and height.
@@ -93,11 +103,21 @@ type UnixScreen struct {
 	renderLock sync.Mutex
 
 	terminalBackground      *Color
-	terminalBackgroundQuery *time.Time // When we asked for the terminal background color
+	terminalBackgroundQuery time.Time // When we asked for the terminal background color
 	terminalBackgroundLock  sync.Mutex
 
 	cells        [][]StyledRune
 	lastRendered lastRendered // Kept up to date by snapshotLastRendered()
+
+	// True while we are on the alternate screen. Guarded by renderLock.
+	alternateScreenActive bool
+
+	// Set by Close(), never cleared. Guarded by renderLock.
+	closed bool
+
+	// True while PauseAndCall() has handed the terminal to somebody else.
+	// Guarded by renderLock.
+	paused bool
 
 	// Note that the type here doesn't matter, we only want to know whether or
 	// not this channel has been signalled
@@ -173,8 +193,6 @@ func NewScreenWithMouseModeAndColorCount(mouseMode MouseMode, terminalColorCount
 	}
 	screen.ttyInReader = newInterruptableReader(screen.ttyIn)
 
-	screen.enterAlternateScreenSession()
-
 	go func() {
 		defer func() {
 			panicHandler("NewScreenWithMouseModeAndColorCount()/mainLoop()", recover(), debug.Stack())
@@ -188,11 +206,27 @@ func NewScreenWithMouseModeAndColorCount(mouseMode MouseMode, terminalColorCount
 	//
 	// Ref:
 	// https://stackoverflow.com/questions/2507337/how-to-determine-a-terminals-background-color
-	fmt.Println("\x1b]11;?\x07")
+	//
+	// Note the query timestamp before asking, so that mainLoop() can never
+	// observe an answer that arrived before we recorded asking for it.
 	screen.terminalBackgroundLock.Lock()
-	defer screen.terminalBackgroundLock.Unlock()
-	now := time.Now()
-	screen.terminalBackgroundQuery = &now
+	screen.terminalBackgroundQuery = time.Now()
+	screen.terminalBackgroundLock.Unlock()
+
+	screen.renderLock.Lock()
+	screen.writeLocked("\x1b]11;?\x07")
+	screen.renderLock.Unlock()
+
+	// Wait for the background color answer (or give up on it) before returning.
+	// Callers want the color for styling their first frame, and waiting for it
+	// here means the wait happens while the user's terminal is still untouched.
+	//
+	// Ref: https://github.com/walles/moor/issues/425
+	screen.TerminalBackground()
+
+	// NOTE: We deliberately do *not* enter the alternate screen here. That
+	// happens on the first Show(), so that a moor run that never paints
+	// anything leaves the terminal alone.
 
 	return &screen, nil
 }
@@ -214,11 +248,15 @@ func (screen *UnixScreen) Close() {
 	// Tell our main loop to exit
 	screen.ttyInReader.Interrupt()
 
-	// Prevent the reader from re-asserting our terminal mode after we restore
-	// it below. The screen is going away, so we never unpause.
+	// Prevent ttyInReader from re-asserting our terminal mode after we restore
+	// it below. The screen is going away, so we never unpause it.
+	//
+	// Pausing it blocks until any ongoing PauseAndCall() has unpaused it again,
+	// which is what keeps us from closing the screen out from under a running
+	// editor. It is also why the closed and paused flags can never both be set.
 	screen.ttyInReader.SetPaused(true)
 
-	screen.leaveAlternateScreenSession()
+	screen.markClosedAndLeaveAlternateScreen()
 
 	err := screen.restoreTtyInTtyOut()
 	if err != nil {
@@ -273,13 +311,30 @@ func (screen *UnixScreen) hideCursorLocked(hide bool) {
 	}
 }
 
-func (screen *UnixScreen) enterAlternateScreenSession() {
+// Leave the alternate screen for good. Doing both under the same lock keeps a
+// concurrent Show() (the signal handler closes us while the pager goroutine is
+// still running) from putting us back on the alternate screen just as we exit.
+func (screen *UnixScreen) markClosedAndLeaveAlternateScreen() {
 	screen.renderLock.Lock()
 	defer screen.renderLock.Unlock()
+
+	screen.closed = true
+	screen.leaveAlternateScreenSessionLocked()
+}
+
+// Does nothing if we're already on the alternate screen, or if the screen is
+// closed or paused.
+//
+// You must hold renderLock when calling this method.
+func (screen *UnixScreen) enterAlternateScreenSessionLocked() {
+	if screen.alternateScreenActive || screen.closed || screen.paused {
+		return
+	}
 
 	screen.setAlternateScreenModeLocked(true)
 	screen.enableMouseTrackingLocked(screen.shouldEnableMouseTracking())
 	screen.hideCursorLocked(true)
+	screen.alternateScreenActive = true
 
 	// Clear the render cache to force a full redraw. This is needed after
 	// suspend/resume because the terminal's alternate screen buffer is blank
@@ -287,14 +342,21 @@ func (screen *UnixScreen) enterAlternateScreenSession() {
 	screen.lastRendered = lastRendered{}
 }
 
-func (screen *UnixScreen) leaveAlternateScreenSession() {
-	screen.renderLock.Lock()
-	defer screen.renderLock.Unlock()
+// Does nothing if we aren't on the alternate screen. Sending ESC[?1049l
+// unpaired is not harmless: it also restores a saved cursor position, so it can
+// teleport the cursor.
+//
+// You must hold renderLock when calling this method.
+func (screen *UnixScreen) leaveAlternateScreenSessionLocked() {
+	if !screen.alternateScreenActive {
+		return
+	}
 
 	screen.writeLocked("\x1b[m")
 	screen.hideCursorLocked(false)
 	screen.enableMouseTrackingLocked(false)
 	screen.setAlternateScreenModeLocked(false)
+	screen.alternateScreenActive = false
 }
 
 func (screen *UnixScreen) shouldEnableMouseTracking() bool {
@@ -501,7 +563,7 @@ func (screen *UnixScreen) mainLoop() {
 				if bg != nil {
 					screen.terminalBackgroundLock.Lock()
 					screen.terminalBackground = bg
-					log.Debug(fmt.Sprint("Terminal background color detected as ", bg, " after ", time.Since(*screen.terminalBackgroundQuery)))
+					log.Debug(fmt.Sprint("Terminal background color detected as ", bg, " after ", time.Since(screen.terminalBackgroundQuery)))
 					screen.terminalBackgroundLock.Unlock()
 
 					expectingTerminalBackgroundColor = false
@@ -710,7 +772,7 @@ func (screen *UnixScreen) TerminalBackground() *Color {
 
 	// Is it already known?
 	screen.terminalBackgroundLock.Lock()
-	if screen.terminalBackground != nil || time.Since(*screen.terminalBackgroundQuery) > maxWait {
+	if screen.terminalBackground != nil || time.Since(screen.terminalBackgroundQuery) > maxWait {
 		// Either we know the color or we gave up waiting for it. Return it!
 		background := screen.terminalBackground
 		screen.terminalBackgroundLock.Unlock()
@@ -723,7 +785,7 @@ func (screen *UnixScreen) TerminalBackground() *Color {
 	start := screen.terminalBackgroundQuery
 	screen.terminalBackgroundLock.Unlock()
 
-	for time.Since(*start) < maxWait {
+	for time.Since(start) < maxWait {
 		screen.terminalBackgroundLock.Lock()
 		if screen.terminalBackground != nil {
 			// There it is!
@@ -970,12 +1032,16 @@ func renderLine(row []StyledRune, width int, terminalColorCount ColorCount) (str
 
 func (screen *UnixScreen) Show() {
 	width, height := screen.Size()
-	screen.showNLines(width, height, true)
+
+	const fullScreen = true
+	screen.showNLines(width, height, fullScreen)
 }
 
 func (screen *UnixScreen) ShowNLines(height int) {
 	width, _ := screen.Size()
-	screen.showNLines(width, height, false)
+
+	const fullScreen = false
+	screen.showNLines(width, height, fullScreen)
 }
 
 // Take a snapshot of the current screen. Will be used on the next render to
@@ -1104,17 +1170,41 @@ func (screen *UnixScreen) showNLinesDeltaLocked(width int, height int) bool {
 	return true
 }
 
-func (screen *UnixScreen) showNLines(width int, height int, clearFirst bool) {
+// Render the topmost height lines of our cells into the terminal.
+//
+// With fullScreen set, this frame is the whole terminal window: it goes on the
+// alternate screen, starting in the top left corner. We switch there first if
+// we aren't already, and render nothing at all if we can't, because overwriting
+// the user's normal screen would destroy contents we have no way of restoring.
+// Owning the screen is also what makes the render cache trustworthy enough to
+// update only the lines that changed.
+//
+// Without fullScreen we print height lines wherever the cursor happens to be,
+// like any other command line tool would. This is how ReprintAfterExit() leaves
+// moor's output behind on the user's own screen.
+func (screen *UnixScreen) showNLines(width int, height int, fullScreen bool) {
 	screen.renderLock.Lock()
 	defer screen.renderLock.Unlock()
 
-	if clearFirst && screen.showNLinesDeltaLocked(width, height) {
+	if fullScreen {
+		// Note that entering drops the render cache, so the delta check below
+		// correctly falls through to a full render the first time around.
+		screen.enterAlternateScreenSessionLocked()
+
+		if !screen.alternateScreenActive {
+			// Somebody else owns the terminal right now: we're either closed,
+			// or paused for an editor or for the shell after Ctrl-Z
+			return
+		}
+	}
+
+	if fullScreen && screen.showNLinesDeltaLocked(width, height) {
 		return
 	}
 
 	var builder strings.Builder
 
-	if clearFirst {
+	if fullScreen {
 		// Start in the top left corner:
 		// https://en.wikipedia.org/wiki/ANSI_escape_code#CSI_(Control_Sequence_Introducer)_sequences
 		builder.WriteString("\x1b[1;1H")
@@ -1122,6 +1212,14 @@ func (screen *UnixScreen) showNLines(width int, height int, clearFirst bool) {
 
 	for row := range height {
 		renderWithNewline(&builder, screen.cells[row], width, screen.terminalColorCount, row == (height-1))
+	}
+
+	if !fullScreen {
+		// The last line can end with a color still set. On the alternate screen
+		// leaving it restores the style, but here we are printing onto the
+		// user's own screen, so whatever we leave behind is what their next
+		// shell prompt gets rendered in.
+		builder.WriteString("\x1b[m")
 	}
 
 	// Write out what we have
@@ -1138,7 +1236,22 @@ func (screen *UnixScreen) PauseAndCall(run func() error) error {
 	screen.ttyInReader.SetPaused(true)
 	defer screen.ttyInReader.SetPaused(false)
 
-	screen.leaveAlternateScreenSession()
+	// The paused flag keeps a concurrent Show() from grabbing the terminal back
+	// from whoever we're handing it to. Reading wasActive under the same lock
+	// as the leave is what makes "restore what we had" trustworthy.
+	screen.renderLock.Lock()
+	wasActive := screen.alternateScreenActive
+	screen.leaveAlternateScreenSessionLocked()
+	screen.paused = true
+	screen.renderLock.Unlock()
+
+	// Covers the error and panic paths below. The happy path can't rely on this
+	// one: it runs after the re-enter, which bails out while we're paused.
+	defer func() {
+		screen.renderLock.Lock()
+		screen.paused = false
+		screen.renderLock.Unlock()
+	}()
 
 	err := screen.restoreTtyInTtyOut()
 	if err != nil {
@@ -1152,7 +1265,13 @@ func (screen *UnixScreen) PauseAndCall(run func() error) error {
 		panic(fmt.Errorf("failed to resume screen after paused operation (%v): %w", runErr, restoreRawErr))
 	}
 
-	screen.enterAlternateScreenSession()
+	screen.renderLock.Lock()
+	screen.paused = false
+	if wasActive {
+		screen.enterAlternateScreenSessionLocked()
+	}
+	screen.renderLock.Unlock()
+
 	screen.onWindowResized()
 
 	if runErr != nil {

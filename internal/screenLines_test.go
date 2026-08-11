@@ -230,6 +230,8 @@ func TestOverflowUp(t *testing.T) {
 }
 
 func TestWrapping(t *testing.T) {
+	isolateStyles(t)
+
 	reader := reader.NewFromTextForTesting("",
 		"first line\nline two will be wrapped\nhere's the last line")
 	pager := NewPager(reader)
@@ -422,6 +424,8 @@ var red = twin.NewColor24Bit(0xff, 0x00, 0x00)
 //
 // The screen being rendered to is always 10 columns wide and 3 rows high.
 func testRenderLinesWithSearchHits(t *testing.T, input string, expectedBackgrounds []twin.Color, scrollPositionName string) {
+	isolateStyles(t)
+
 	r := reader.NewFromTextForTesting("test", input)
 	pager := Pager{
 		screen:         twin.NewFakeScreen(10, 3),
@@ -438,7 +442,7 @@ func testRenderLinesWithSearchHits(t *testing.T, input string, expectedBackgroun
 	pager.showLineNumbers = false
 	assert.NilError(t, r.Wait())
 
-	searchHitLineBackground = &red
+	theme.searchHitLineBackground = &red
 
 	rendered := pager.renderLines()
 	assert.Equal(t, len(rendered.lines), len(expectedBackgrounds))

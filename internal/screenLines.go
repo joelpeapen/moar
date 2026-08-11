@@ -40,9 +40,21 @@ type renderedScreen struct {
 }
 
 // Refresh the whole pager display, both contents lines and the status line at
-// the bottom
+// the bottom, and show the result on the terminal
 func (p *Pager) redraw(spinner string) {
-	log.Trace("redraw called")
+	p.renderIntoCells(spinner)
+	p.screen.Show()
+}
+
+// Render the whole pager display into the screen's cells, both contents lines
+// and the status line at the bottom.
+//
+// Nothing reaches the terminal until somebody Show()s the screen.
+//
+// Returns the number of screen lines the contents ended up on, not counting the
+// status line below them.
+func (p *Pager) renderIntoCells(spinner string) int {
+	log.Trace("renderIntoCells called")
 	p.screen.Clear()
 	p.longestLineLength = 0
 
@@ -63,7 +75,7 @@ func (p *Pager) redraw(spinner string) {
 		// This happens when we're done
 		eofSpinner = "---"
 	}
-	spinnerLine := textstyles.StyledRunesFromString(statusbarStyle, eofSpinner, nil, 0).StyledRunes
+	spinnerLine := textstyles.StyledRunesFromString(theme.statusbar, eofSpinner, nil, 0).StyledRunes
 	column := 0
 	for _, cell := range spinnerLine {
 		column += p.screen.SetCell(column, lastUpdatedScreenLineNumber+1, cell.ToStyledRune())
@@ -71,7 +83,7 @@ func (p *Pager) redraw(spinner string) {
 
 	p.mode.drawFooter(renderedScreen.filenameText, renderedScreen.statusText, spinner)
 
-	p.screen.Show()
+	return len(renderedScreen.lines)
 }
 
 // Render all lines that should go on the screen.
@@ -221,7 +233,7 @@ func (p *Pager) renderLine(line reader.NumberedLine, numberPrefixLength int, hig
 	var wrapped []textstyles.StyledRunesWithTrailer
 	var highlighted textstyles.StyledRunesWithTrailer
 	if p.WrapLongLines {
-		highlighted = line.HighlightedTokens(plainTextStyle, searchHitStyle, p.search, 0)
+		highlighted = line.HighlightedTokens(theme.plainText, theme.searchHit, p.search, 0)
 
 		wrapped = wrapLine(width-numberPrefixLength, highlighted.StyledRunes)
 	} else {
@@ -231,7 +243,7 @@ func (p *Pager) renderLine(line reader.NumberedLine, numberPrefixLength int, hig
 		//
 		// This is a huge performance gain when dealing with files with
 		// extremeny long lines: https://github.com/walles/moor/issues/358
-		highlighted = line.HighlightedTokens(plainTextStyle, searchHitStyle, p.search, width+p.leftColumnZeroBased+1)
+		highlighted = line.HighlightedTokens(theme.plainText, theme.searchHit, p.search, width+p.leftColumnZeroBased+1)
 
 		// All on one line
 		wrapped = []textstyles.StyledRunesWithTrailer{{
@@ -241,16 +253,16 @@ func (p *Pager) renderLine(line reader.NumberedLine, numberPrefixLength int, hig
 		}}
 	}
 
-	if highlightSearchHitLines && searchHitLineBackground != nil {
+	if highlightSearchHitLines && theme.searchHitLineBackground != nil {
 		// Highlight any sub lines with search hits
 		for i := range wrapped {
 			line := &wrapped[i] // We need a pointer to modify in place, otherwise setting the trailer won't have any effect
 			if line.ContainsSearchHit {
 				// Highlight this line!
 				for i := range line.StyledRunes {
-					line.StyledRunes[i].Style = line.StyledRunes[i].Style.WithBackground(*searchHitLineBackground)
+					line.StyledRunes[i].Style = line.StyledRunes[i].Style.WithBackground(*theme.searchHitLineBackground)
 				}
-				line.Trailer = line.Trailer.WithBackground(*searchHitLineBackground)
+				line.Trailer = line.Trailer.WithBackground(*theme.searchHitLineBackground)
 			}
 		}
 	}
@@ -427,7 +439,7 @@ func createLinePrefix(lineNumber *linemetadata.Number, numberPrefixLength int) [
 			break
 		}
 
-		lineNumberPrefix = append(lineNumberPrefix, textstyles.CellWithMetadata{Rune: digit, Style: lineNumbersStyle})
+		lineNumberPrefix = append(lineNumberPrefix, textstyles.CellWithMetadata{Rune: digit, Style: theme.lineNumbers})
 	}
 
 	return lineNumberPrefix
