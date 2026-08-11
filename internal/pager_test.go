@@ -230,6 +230,7 @@ func TestReprintAfterExitFillsScreen(t *testing.T) {
 
 			pager.ReprintAfterExit()
 
+			assert.Equal(t, "line 1", rowToString(screen.GetRow(0)))
 			assert.Equal(t, "line 10", rowToString(screen.GetRow(screenHeight-1)))
 		})
 	}

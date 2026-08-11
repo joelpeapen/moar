@@ -268,17 +268,6 @@ One branch per step, each merged into master separately.
 Ordering constraint: step 5 depends on steps 2 and 4. Steps 7 and 8 depend on
 step 5, and are independent of each other.
 
-## Deferred
-
-Found while working on the above, unrelated to the blink. Not scheduled, and
-not a reason to keep this file around.
-
-- **`--quit-if-one-screen` can drop the last line when `DeInitFalseMargin` is
-  0.** `fitsOnOneScreen()` accepts `GetLineCount() == screenHeight` while
-  `renderLines()` caps at `screenHeight - 1`. Reachable with
-  `--no-clear-on-exit-margin 0`, and quietly through `pkg/moor`, which sets
-  `QuitIfOneScreen` but never `DeInitFalseMargin`.
-
 ## Known residue after all of this
 
 Input that is short but dribbles in over longer than the grace period will
