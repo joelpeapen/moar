@@ -289,10 +289,6 @@ not a reason to keep this file around.
   `--no-clear-on-exit-margin 0`, and quietly through `pkg/moor`, which sets
   `QuitIfOneScreen` but never `DeInitFalseMargin`.
 
-- **`FakeScreen.RequestTerminalBackgroundColor()` is dead code.**
-  `twin/fake-screen.go:104`. It is not part of the `Screen` interface, no
-  `UnixScreen` counterpart exists, and nothing calls it. Deletable as is.
-
 - **`go test -count=5 ./internal/` fails `TestSearchHighlight` 4 times out of
   5.** `internal/screenLines_test.go:126`. The package level style variables in
   `internal/styling.go:15-29` are set up by `styleUI()` and never reset, so a

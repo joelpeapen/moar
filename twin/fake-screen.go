@@ -101,10 +101,6 @@ func (screen *FakeScreen) Size() (width int, height int) {
 	return screen.width, screen.height
 }
 
-func (screen *FakeScreen) RequestTerminalBackgroundColor() {
-	// This method intentionally left blank
-}
-
 func (screen *FakeScreen) TerminalBackground() *Color {
 	return nil
 }
