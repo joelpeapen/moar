@@ -6,11 +6,14 @@ import (
 	"math"
 	"os"
 	"path"
+	"strings"
 	"sync"
 	"testing"
 	"time"
 
 	"github.com/alecthomas/chroma/v2"
+	"github.com/alecthomas/chroma/v2/lexers"
+	"github.com/alecthomas/chroma/v2/styles"
 	"github.com/klauspost/compress/zstd"
 	"gotest.tools/v3/assert"
 )
@@ -26,6 +29,40 @@ func TestReadTextDone(t *testing.T) {
 	testMe := NewFromTextForTesting("", "Johan")
 
 	assert.NilError(t, testMe.Wait())
+}
+
+type panickingFormatter struct{}
+
+func (formatter panickingFormatter) Format(io.Writer, *chroma.Style, chroma.Iterator) error {
+	panic("Highlighting blew up")
+}
+
+// A reader that panics on the way is still done afterwards, so that whoever
+// waits for it can stop waiting.
+//
+// Panics in a reader are logged rather than propagated, so without this the
+// pager would hold back its first paint forever waiting for highlighting, and
+// spin its spinner forever waiting for reading.
+func TestReaderIsDoneAfterHighlightingPanics(t *testing.T) {
+	testMe, err := NewFromStream("", strings.NewReader(`{"one": 1}`),
+		panickingFormatter{}, ReaderOptions{Lexer: lexers.Get("json")})
+	assert.NilError(t, err)
+
+	// Highlighting waits for this, and panics once it arrives
+	testMe.SetStyleForHighlighting(*styles.Get("native"))
+
+	giveUp := time.After(time.Second)
+	for !testMe.HighlightingDone.Load() {
+		select {
+		case <-testMe.MaybeDone:
+			// Progress, look again
+
+		case <-giveUp:
+			t.Fatal("Highlighting never reported done after panicking")
+		}
+	}
+
+	assert.Assert(t, testMe.ReadingDone.Load(), "Reading should be done as well")
 }
 
 // NewFromStream takes ownership of the stream, so once it has consumed the
