@@ -216,6 +216,8 @@ func printUsage(flagSet *flag.FlagSet, colors twin.ColorCount) {
 
 	fmt.Println("  +1234")
 	fmt.Println("    \tImmediately scroll to line 1234")
+	fmt.Println("  +/pattern")
+	fmt.Println("    \tImmediately search for \"pattern\"")
 }
 
 // If $PAGER isn't pointing to us, print a help text on how to set it.
