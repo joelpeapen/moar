@@ -103,29 +103,27 @@ func TestPauseAfterNLines_Polling(t *testing.T) {
 	_, err = file.WriteString("two\n")
 	assert.NilError(t, err)
 
-	// Wait up to two seconds for tailFile() to give us the new line even though
-	// we are paused. That shouldn't happen. If it does we fail here.
-	//
-	// tailFile() polls every second, so two seconds should cover it.
+	// Wait for several tailFile() poll cycles to give us the new line even
+	// though we are paused. That shouldn't happen. If it does we fail here.
 	for range 20 {
 		allLines := testMe.GetLines(linemetadata.Index{}, 10)
 		if len(allLines.Lines) == 2 {
 			assert.Assert(t, false, "Reader should not have received a new line while paused")
 		}
-		time.Sleep(100 * time.Millisecond)
+		time.Sleep(tailPollInterval)
 	}
 
 	// No new line while paused, good! Unpause.
 	testMe.SetPauseAfterLines(99)
 
-	// Give the new line two seconds to arrive
+	// Give the new line a bunch of poll cycles to arrive
 	var bothLines []NumberedLine
 	for range 20 {
 		bothLines = testMe.GetLines(linemetadata.Index{}, 10).Lines
 		if len(bothLines) > 1 {
 			break
 		}
-		time.Sleep(100 * time.Millisecond)
+		time.Sleep(tailPollInterval)
 	}
 
 	// Verify that we have both lines now

@@ -12,8 +12,18 @@ import (
 	"gotest.tools/v3/assert"
 )
 
+// TestMain overrides tailFile()'s poll interval for the whole package's test
+// binary, so tests waiting on tailing don't have to sleep at the production
+// 1s cadence. This is set once, before any test (and thus any tailing
+// goroutine) starts, so there's no data race with tailFile()'s reads of it.
+func TestMain(m *testing.M) {
+	tailPollInterval = 10 * time.Millisecond
+	os.Exit(m.Run())
+}
+
 func setupWatcherTest(t *testing.T, initialContents string) (*ReaderImpl, *os.File) {
 	t.Helper()
+
 	file, err := os.CreateTemp("", "moor-watcher-test-*.txt")
 	assert.NilError(t, err)
 	t.Cleanup(func() { _ = os.Remove(file.Name()) })
