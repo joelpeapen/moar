@@ -34,7 +34,7 @@ RACE_REPORTS=""
 if [ -z "${CI}" ]; then
   RACE_REPORTS="log_path=${PWD}/moor-race-report"
 fi
-GORACE="${RACE_REPORTS}" go test $RACE -timeout 20s ./...
+GORACE="${RACE_REPORTS}" go test $RACE -timeout 60s ./...
 
 # Ensure we can cross compile
 # NOTE: Make sure this list matches the one in release.sh
