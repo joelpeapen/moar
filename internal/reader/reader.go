@@ -322,15 +322,12 @@ func (reader *ReaderImpl) createStatusUnlocked(lastLine linemetadata.Index) Stat
 		linesCount = ""
 	}
 
-	if len(linesCount) > 0 {
-		if len(status.FilenameText) > 0 {
-			status.StatusText += ": "
-		}
-		status.StatusText += linesCount
+	if len(status.FilenameText) > 0 {
+		status.StatusText += ": "
 	}
 
-	if len(status.StatusText) > 0 {
-		status.StatusText += "  "
+	if len(linesCount) > 0 {
+		status.StatusText += linesCount + "  "
 	}
 	status.StatusText += fmt.Sprintf("%d%%", percent)
 
