@@ -7,6 +7,8 @@ import (
 
 type ProgressState int
 
+// Numbers here match the ones from
+// https://rockorager.dev/misc/osc-9-4-progress-bars/.
 const (
 	ProgressStateRemove        ProgressState = 0
 	ProgressStateSet           ProgressState = 1

@@ -328,6 +328,10 @@ func (screen *UnixScreen) markClosedAndLeaveAlternateScreen() {
 	screen.closed = true
 	screen.leaveAlternateScreenSessionLocked()
 
+	// Reset progress state so that calling ShowNLines() after Close() won't
+	// leave a progress bar on the screen.
+	screen.progress = Progress{}
+
 	// Restore terminal progress bar. See renderProgress() for details.
 	screen.writeLocked("\x1b]9;4;0\x07")
 }
