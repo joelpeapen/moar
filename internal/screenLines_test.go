@@ -109,8 +109,8 @@ func TestEmpty(t *testing.T) {
 
 	rendered := pager.renderLines()
 	assert.Equal(t, len(rendered.lines), 0)
-	assert.Equal(t, "test", rendered.filenameText)
-	assert.Equal(t, ": <empty>", rendered.statusText)
+	assert.Equal(t, "test", rendered.FilenameText)
+	assert.Equal(t, ": <empty>", rendered.StatusText)
 	assert.Assert(t, pager.lineIndex() == nil)
 }
 
@@ -197,8 +197,8 @@ func TestOverflowDown(t *testing.T) {
 	rendered := pager.renderLines()
 	assert.Equal(t, len(rendered.lines), 1)
 	assert.Equal(t, "hej", renderedToString(rendered.lines[0].cells))
-	assert.Equal(t, rendered.filenameText, "test")
-	assert.Equal(t, rendered.statusText, ": 1 line  100%")
+	assert.Equal(t, rendered.FilenameText, "test")
+	assert.Equal(t, rendered.StatusText, ": 1 line  100%")
 	assert.Assert(t, pager.lineIndex().IsZero())
 	assert.Equal(t, pager.deltaScreenLines(), linemetadata.ScreenLines(0))
 }
@@ -223,8 +223,8 @@ func TestOverflowUp(t *testing.T) {
 	rendered := pager.renderLines()
 	assert.Equal(t, len(rendered.lines), 1)
 	assert.Equal(t, "hej", renderedToString(rendered.lines[0].cells))
-	assert.Equal(t, rendered.filenameText, "test")
-	assert.Equal(t, rendered.statusText, ": 1 line  100%")
+	assert.Equal(t, rendered.FilenameText, "test")
+	assert.Equal(t, rendered.StatusText, ": 1 line  100%")
 	assert.Assert(t, pager.lineIndex().IsZero())
 	assert.Equal(t, pager.deltaScreenLines(), linemetadata.ScreenLines(0))
 }
