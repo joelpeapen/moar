@@ -17,6 +17,11 @@ const (
 	ProgressStatePause         ProgressState = 4
 )
 
+// Tell the terminal to remove the progress bar.
+//
+// See renderProgress() below for details.
+const progressRemoveSequence = "\x1b]9;4;0\x07"
+
 // Terminal progress bar state
 //
 // Ref: https://rockorager.dev/misc/osc-9-4-progress-bars/

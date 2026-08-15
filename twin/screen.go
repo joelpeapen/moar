@@ -333,7 +333,7 @@ func (screen *UnixScreen) markClosedAndLeaveAlternateScreen() {
 	screen.progress = Progress{}
 
 	// Restore terminal progress bar. See renderProgress() for details.
-	screen.writeLocked("\x1b]9;4;0\x07")
+	screen.writeLocked(progressRemoveSequence)
 }
 
 // Does nothing if we're already on the alternate screen, or if the screen is
@@ -1258,6 +1258,11 @@ func (screen *UnixScreen) PauseAndCall(run func() error) error {
 	screen.renderLock.Lock()
 	wasActive := screen.alternateScreenActive
 	screen.leaveAlternateScreenSessionLocked()
+
+	// Drop any progress bar while paused. Will be restored as a side effect of
+	// screen.onWindowResized() below.
+	screen.writeLocked(progressRemoveSequence)
+
 	screen.paused = true
 	screen.renderLock.Unlock()
 
