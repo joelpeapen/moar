@@ -68,10 +68,10 @@ func TestPauseAfterNLines(t *testing.T) {
 		"Reader should have the second line after unpausing")
 }
 
-// While the reader is paused during initial loading, the line count is
-// hidden from the status text (it would be misleading, since it's not the
-// final count yet). The filename and the percentage should still be visually
-// separated from each other in that case.
+// While the reader is paused during initial loading, the line count is hidden
+// from the status text (it would be misleading, since it's not the final count
+// yet). The filename and the percentage should still be visually separated from
+// each other in that case.
 func TestStatusSeparatorWhilePaused(t *testing.T) {
 	pauseAfterLines := 1
 
