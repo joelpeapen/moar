@@ -45,15 +45,15 @@ func (screen *UnixScreen) SetProgress(state ProgressState, percent int) {
 }
 
 func (screen *UnixScreen) renderProgress() string {
-	osc := `\x1b]9;4;`
+	osc := "\x1b]9;4;"
 	osc += strconv.Itoa(int(screen.progress.State))
 
 	if screen.progress.State != ProgressStateRemove && screen.progress.State != ProgressStateIndeterminate {
-		osc += `;`
+		osc += ";"
 		osc += strconv.Itoa(screen.progress.Percent)
 	}
 
-	osc += `\x07`
+	osc += "\x07"
 
 	return osc
 }
