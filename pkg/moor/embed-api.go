@@ -82,8 +82,8 @@ func PageFromStream(reader io.Reader, options Options) error {
 // and feed keyboard/mouse events from the host TUI's event loop.
 //
 // Unlike PageFromStream, this function does not require stdout to be a
-// terminal - the caller's custom screen decides where output goes. 
-// 
+// terminal - the caller's custom screen decides where output goes.
+//
 // Note that the caller is responsible for the screen lifecycle (including Close()).
 //
 // PageFromStreamWithScreen blocks until the pager exits (the user presses 'q'
