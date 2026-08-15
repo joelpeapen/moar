@@ -75,6 +75,39 @@ func PageFromStream(reader io.Reader, options Options) error {
 	return pageFromReader(pagerReader, options)
 }
 
+// PageFromStreamWithScreen is like PageFromStream but lets the caller provide
+// a custom twin.Screen implementation instead of allocating one from the real
+// terminal. This enables embedding moor inside another TUI (e.g. a bubbletea
+// app): the caller implements twin.Screen to render moor's output into a pane
+// and feed keyboard/mouse events from the host TUI's event loop.
+//
+// Unlike PageFromStream, this function does not require stdout to be a
+// terminal - the caller's custom screen decides where output goes. 
+// 
+// Note that the caller is responsible for the screen lifecycle (including Close()).
+//
+// PageFromStreamWithScreen blocks until the pager exits (the user presses 'q'
+// or the screen sends an EventExit). Feed events to screen.Events() from
+// another goroutine and run this in its own goroutine if you need concurrent
+// rendering.
+func PageFromStreamWithScreen(reader io.Reader, screen twin.Screen, options Options) error {
+	logs := startLogCollection()
+	defer collectLogs(logs)
+
+	pagerReader, err := internalReader.NewFromStream(
+		options.Title,
+		reader,
+		getColorFormatter(),
+		internalReader.ReaderOptions{
+			ShouldFormat: !options.NoAutoFormat,
+		})
+	if err != nil {
+		return err
+	}
+
+	return pageFromReaderWithScreen(pagerReader, screen, options)
+}
+
 // If stdout is not a terminal, the file contents will just be printed to
 // stdout.
 func PageFromFile(name string, options Options) error {
@@ -156,6 +189,18 @@ func getColorFormatter() chroma.Formatter {
 }
 
 func pageFromReader(reader *internalReader.ReaderImpl, options Options) error {
+	screen, e := twin.NewScreen()
+	if e != nil {
+		// Screen setup failed
+		return e
+	}
+	return pageFromReaderWithScreen(reader, screen, options)
+}
+
+// pageFromReaderWithScreen is the shared implementation for both the
+// terminal-backed (pageFromReader) and custom-screen (PageFromStreamWithScreen)
+// entry points. The caller owns the screen and is responsible for Close().
+func pageFromReaderWithScreen(reader *internalReader.ReaderImpl, screen twin.Screen, options Options) error {
 	// Closing the reader closes the stream it came from, which is what our
 	// callers promise their callers
 	defer reader.Close()
@@ -164,12 +209,6 @@ func pageFromReader(reader *internalReader.ReaderImpl, options Options) error {
 	pager.WrapLongLines = options.WrapLongLines
 	pager.ShowLineNumbers = !options.NoLineNumbers
 	pager.QuitIfOneScreen = options.QuitIfOneScreen
-
-	screen, e := twin.NewScreen()
-	if e != nil {
-		// Screen setup failed
-		return e
-	}
 
 	style := internal.GetStyleForScreen(screen)
 	reader.SetStyleForHighlighting(style)
