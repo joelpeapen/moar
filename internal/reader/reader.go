@@ -63,8 +63,8 @@ type Reader interface {
 	// in the provided preallocated slice to avoid allocations. The line count is
 	// determined by the capacity of the provided slice.
 	//
-	// The return value is the status text for the returned lines.
-	GetLinesPreallocated(firstLine linemetadata.Index, resultLines *[]NumberedLine) (string, string)
+	// The return value is the status for the returned lines.
+	GetLinesPreallocated(firstLine linemetadata.Index, resultLines *[]NumberedLine) Status
 
 	// False when paused. Showing the paused line count is confusing, because
 	// the user might think that the number is the total line count, even though
@@ -173,13 +173,20 @@ func (reader *ReaderImpl) closeStream() {
 	})
 }
 
+// Status describes the current view into the input, for display in the status
+// bar and reporting to the terminal.
+type Status struct {
+	// Example: "monkey.txt".
+	FilenameText string
+
+	// Example: ": 45 lines  51%"
+	StatusText string
+}
+
 // InputLines contains a number of lines from the reader, plus metadata
 type InputLines struct {
 	Lines []NumberedLine
-
-	// "monkey.txt: 1-23/45 51%"
-	FilenameText string
-	StatusText   string
+	Status
 }
 
 func TryOpen(filename string) error {
@@ -286,56 +293,48 @@ func (reader *ReaderImpl) Wait() error {
 }
 
 // createStatusUnlocked() assumes that its caller is holding the read lock
-func (reader *ReaderImpl) createStatusUnlocked(lastLine linemetadata.Index) (string, string) {
-	displayName := ""
+func (reader *ReaderImpl) createStatusUnlocked(lastLine linemetadata.Index) Status {
+	status := Status{}
 	if reader.DisplayName != nil {
-		displayName = *reader.DisplayName
+		status.FilenameText = *reader.DisplayName
 	}
 
 	if len(reader.lines) == 0 {
-		empty := "<empty>"
-		if len(displayName) > 0 {
-			return displayName, ": " + empty
+		status.StatusText = "<empty>"
+		if len(status.FilenameText) > 0 {
+			status.StatusText = ": " + status.StatusText
 		}
-		return "", empty
+		return status
 	}
 
 	linesCount := ""
-	percent := ""
+	var percent int
 	if len(reader.lines) == 1 {
 		linesCount = "1 line"
-		percent = "100%"
+		percent = 100
 	} else {
 		// More than one line
 		linesCount = util.FormatInt(len(reader.lines)) + " lines"
-		percent = fmt.Sprintf("%.0f%%", math.Floor(100*float64(lastLine.Index()+1)/float64(len(reader.lines))))
+		percent = int(math.Floor(100 * float64(lastLine.Index()+1) / float64(len(reader.lines))))
 	}
 
 	if !reader.ShouldShowLineCount() {
 		linesCount = ""
 	}
 
-	return_me := ""
-
 	if len(linesCount) > 0 {
-		if len(displayName) > 0 {
-			return_me += ": "
+		if len(status.FilenameText) > 0 {
+			status.StatusText += ": "
 		}
-		return_me += linesCount
+		status.StatusText += linesCount
 	}
 
-	if len(percent) > 0 {
-		if len(return_me) > 0 {
-			return_me += "  "
-		}
-		return_me += percent
+	if len(status.StatusText) > 0 {
+		status.StatusText += "  "
 	}
+	status.StatusText += fmt.Sprintf("%d%%", percent)
 
-	if len(displayName) > 0 {
-		return displayName, return_me
-	}
-	return "", return_me
-
+	return status
 }
 
 // Wait for the first line to be read.
@@ -451,13 +450,10 @@ func (reader *ReaderImpl) GetLines(firstLine linemetadata.Index, wantedLineCount
 	reader.RLock()
 	lineCount := len(reader.lines)
 	if lineCount == 0 || wantedLineCount == 0 {
-		filenameText, statusText := reader.createStatusUnlocked(firstLine)
+		status := reader.createStatusUnlocked(firstLine)
 		reader.RUnlock()
 
-		return InputLines{
-			FilenameText: filenameText,
-			StatusText:   statusText,
-		}
+		return InputLines{Status: status}
 	}
 	reader.RUnlock()
 
@@ -465,12 +461,11 @@ func (reader *ReaderImpl) GetLines(firstLine linemetadata.Index, wantedLineCount
 	wantedLineCount = lastLineIndex - firstLineIndex + 1
 
 	resultLines := make([]NumberedLine, 0, wantedLineCount)
-	filenameText, statusText := reader.GetLinesPreallocated(linemetadata.IndexFromZeroBased(firstLineIndex), &resultLines)
+	status := reader.GetLinesPreallocated(linemetadata.IndexFromZeroBased(firstLineIndex), &resultLines)
 
 	return InputLines{
-		Lines:        resultLines,
-		FilenameText: filenameText,
-		StatusText:   statusText,
+		Lines:  resultLines,
+		Status: status,
 	}
 }
 
@@ -478,24 +473,24 @@ func (reader *ReaderImpl) GetLines(firstLine linemetadata.Index, wantedLineCount
 // in the provided preallocated slice to avoid allocations. The line count is
 // determined by the capacity of the provided slice.
 //
-// The return value is the status text for the returned lines.
-func (reader *ReaderImpl) GetLinesPreallocated(firstLine linemetadata.Index, resultLines *[]NumberedLine) (string, string) {
+// The return value is the status for the returned lines.
+func (reader *ReaderImpl) GetLinesPreallocated(firstLine linemetadata.Index, resultLines *[]NumberedLine) Status {
 	// Clear the result slice
 	*resultLines = (*resultLines)[:0]
 
 	reader.RLock()
 
 	if len(reader.lines) == 0 || cap(*resultLines) == 0 {
-		filenameText, statusText := reader.createStatusUnlocked(firstLine)
+		status := reader.createStatusUnlocked(firstLine)
 		reader.RUnlock()
 
-		return filenameText, statusText
+		return status
 	}
 
 	// Prevent reading past the end of the available lines
 	firstLineIndex, lastLineIndex := clipRangeToLength(firstLine, cap(*resultLines), len(reader.lines)-1)
 
-	filenameText, statusText := reader.createStatusUnlocked(linemetadata.IndexFromZeroBased(lastLineIndex))
+	status := reader.createStatusUnlocked(linemetadata.IndexFromZeroBased(lastLineIndex))
 
 	for loopIndex, returnLine := range reader.lines[firstLineIndex : lastLineIndex+1] {
 		*resultLines = append(*resultLines, NumberedLine{
@@ -507,7 +502,7 @@ func (reader *ReaderImpl) GetLinesPreallocated(firstLine linemetadata.Index, res
 
 	reader.RUnlock()
 
-	return filenameText, statusText
+	return status
 }
 
 func (reader *ReaderImpl) PumpToStdout() {

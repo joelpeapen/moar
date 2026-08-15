@@ -35,8 +35,7 @@ type renderedScreen struct {
 	lines             []renderedLine
 	inputLines        []reader.NumberedLine
 	numberPrefixWidth int // Including padding. 0 means no line numbers.
-	filenameText      string
-	statusText        string
+	reader.Status
 }
 
 // Refresh the whole pager display, both contents lines and the status line at
@@ -81,7 +80,13 @@ func (p *Pager) renderIntoCells(spinner string) int {
 		column += p.screen.SetCell(column, lastUpdatedScreenLineNumber+1, cell.ToStyledRune())
 	}
 
-	p.mode.drawFooter(renderedScreen.filenameText, renderedScreen.statusText, spinner)
+	p.mode.drawFooter(renderedScreen.FilenameText, renderedScreen.StatusText, spinner)
+
+	if spinner != "" {
+		p.screen.SetProgress(twin.ProgressStateIndeterminate, 0)
+	} else {
+		p.screen.SetProgress(twin.ProgressStateRemove, 0)
+	}
 
 	return len(renderedScreen.lines)
 }
@@ -125,7 +130,7 @@ func (p *Pager) internalRenderLines(highlightSearchHitLines bool) renderedScreen
 	inputLines := p.Reader().GetLines(lineIndexToShow, int(p.visibleHeight()))
 	if len(inputLines.Lines) == 0 {
 		// Empty input, empty output
-		return renderedScreen{filenameText: inputLines.FilenameText, statusText: inputLines.StatusText}
+		return renderedScreen{Status: inputLines.Status}
 	}
 
 	// We must use the exact same max number prefix length as the scroll engine
@@ -211,8 +216,7 @@ func (p *Pager) internalRenderLines(highlightSearchHitLines bool) renderedScreen
 
 	return renderedScreen{
 		lines:             allLines,
-		filenameText:      inputLines.FilenameText,
-		statusText:        inputLines.StatusText,
+		Status:            inputLines.Status,
 		inputLines:        inputLines.Lines,
 		numberPrefixWidth: numberPrefixLength,
 	}

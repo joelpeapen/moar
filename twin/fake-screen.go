@@ -89,6 +89,10 @@ func (screen *FakeScreen) GetCell(column int, row int) StyledRune {
 	return screen.cells[row][column]
 }
 
+func (screen *FakeScreen) SetProgress(state ProgressState, percent int) {
+	// This method intentionally left blank
+}
+
 func (screen *FakeScreen) Show() {
 	// This method intentionally left blank
 }

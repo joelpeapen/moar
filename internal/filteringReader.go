@@ -193,9 +193,7 @@ func (f *FilteringReader) GetLines(firstLine linemetadata.Index, wantedLineCount
 	acceptedLines := f.getAllLines()
 
 	if len(acceptedLines) == 0 || wantedLineCount == 0 {
-		return reader.InputLines{
-			StatusText: f.createStatus(nil),
-		}
+		return reader.InputLines{Status: f.createStatus(nil)}
 	}
 
 	lastLine := firstLine.NonWrappingAdd(wantedLineCount - 1)
@@ -213,27 +211,27 @@ func (f *FilteringReader) GetLines(firstLine linemetadata.Index, wantedLineCount
 	}
 
 	return reader.InputLines{
-		Lines:      acceptedLines[firstLine.Index() : firstLine.Index()+wantedLineCount],
-		StatusText: f.createStatus(&lastLine),
+		Lines:  acceptedLines[firstLine.Index() : firstLine.Index()+wantedLineCount],
+		Status: f.createStatus(&lastLine),
 	}
 }
 
-func (f *FilteringReader) GetLinesPreallocated(firstLine linemetadata.Index, resultLines *[]reader.NumberedLine) (string, string) {
+func (f *FilteringReader) GetLinesPreallocated(firstLine linemetadata.Index, resultLines *[]reader.NumberedLine) reader.Status {
 	if f.shouldPassThrough() {
 		return f.BackingReader.GetLinesPreallocated(firstLine, resultLines)
 	}
 
 	lines := f.GetLines(firstLine, cap(*resultLines))
 	*resultLines = lines.Lines
-	return lines.FilenameText, lines.StatusText
+	return lines.Status
 }
 
 // In the general case, this will return a text like this:
 // "Filtered: 1234/5678 lines  22%"
-func (f *FilteringReader) createStatus(lastLine *linemetadata.Index) string {
+func (f *FilteringReader) createStatus(lastLine *linemetadata.Index) reader.Status {
 	baseCount := f.BackingReader.GetLineCount()
 	if baseCount == 0 {
-		return "Filtered: No input lines"
+		return reader.Status{StatusText: "Filtered: No input lines"}
 	}
 
 	baseCountString := "/" + linemetadata.IndexFromLength(baseCount).Format()
@@ -243,7 +241,7 @@ func (f *FilteringReader) createStatus(lastLine *linemetadata.Index) string {
 
 	if lastLine == nil {
 		// 100% because we're showing all 0 lines
-		return "Filtered: 0" + baseCountString + " lines  100%"
+		return reader.Status{StatusText: "Filtered: 0" + baseCountString + " lines  100%"}
 	}
 
 	acceptedCount := f.GetLineCount()
@@ -256,8 +254,10 @@ func (f *FilteringReader) createStatus(lastLine *linemetadata.Index) string {
 		lineString += "s"
 	}
 
-	return fmt.Sprintf("Filtered: %s%s %s  %d%%",
-		acceptedCountString, baseCountString, lineString, percent)
+	return reader.Status{
+		StatusText: fmt.Sprintf("Filtered: %s%s %s  %d%%",
+			acceptedCountString, baseCountString, lineString, percent),
+	}
 }
 
 // SetBackingReader switches the underlying reader while holding the lock and
