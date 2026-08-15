@@ -53,6 +53,11 @@ type Screen interface {
 	// For out-of-bounds requests, a space with default style is returned.
 	GetCell(column int, row int) StyledRune
 
+	// Ask the terminal to show a progress bar
+	//
+	// Ref: https://rockorager.dev/misc/osc-9-4-progress-bars/
+	SetProgress(state ProgressState, percent int)
+
 	// Render our contents into the terminal window.
 	//
 	// The first call takes over the terminal: alternate screen, cursor hidden,
@@ -108,6 +113,8 @@ type UnixScreen struct {
 
 	cells        [][]StyledRune
 	lastRendered lastRendered // Kept up to date by snapshotLastRendered()
+
+	progress Progress
 
 	// True while we are on the alternate screen. Guarded by renderLock.
 	alternateScreenActive bool
