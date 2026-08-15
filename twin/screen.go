@@ -114,6 +114,8 @@ type UnixScreen struct {
 	cells        [][]StyledRune
 	lastRendered lastRendered // Kept up to date by snapshotLastRendered()
 
+	// Progress bar state, sent to the terminal on every render. Guarded by
+	// renderLock.
 	progress Progress
 
 	// True while we are on the alternate screen. Guarded by renderLock.
@@ -1212,7 +1214,7 @@ func (screen *UnixScreen) showNLines(width int, height int, fullScreen bool) {
 		}
 	}
 
-	screen.writeLocked(screen.renderProgress())
+	screen.writeLocked(screen.renderProgressLocked())
 
 	if fullScreen && screen.showNLinesDeltaLocked(width, height) {
 		return

@@ -43,13 +43,17 @@ func (screen *UnixScreen) SetProgress(state ProgressState, percent int) {
 		percent = 100
 	}
 
+	screen.renderLock.Lock()
+	defer screen.renderLock.Unlock()
+
 	screen.progress = Progress{
 		State:   state,
 		Percent: percent,
 	}
 }
 
-func (screen *UnixScreen) renderProgress() string {
+// You must hold renderLock when calling this method.
+func (screen *UnixScreen) renderProgressLocked() string {
 	osc := "\x1b]9;4;"
 	osc += strconv.Itoa(int(screen.progress.State))
 
