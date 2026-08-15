@@ -1205,6 +1205,8 @@ func (screen *UnixScreen) showNLines(width int, height int, fullScreen bool) {
 		}
 	}
 
+	screen.writeLocked(screen.renderProgress())
+
 	if fullScreen && screen.showNLinesDeltaLocked(width, height) {
 		return
 	}
