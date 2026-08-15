@@ -327,6 +327,9 @@ func (screen *UnixScreen) markClosedAndLeaveAlternateScreen() {
 
 	screen.closed = true
 	screen.leaveAlternateScreenSessionLocked()
+
+	// Restore terminal progress bar. See renderProgress() for details.
+	screen.writeLocked("\x1b]9;4;0\x07")
 }
 
 // Does nothing if we're already on the alternate screen, or if the screen is
