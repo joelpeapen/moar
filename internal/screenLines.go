@@ -82,6 +82,12 @@ func (p *Pager) renderIntoCells(spinner string) int {
 
 	p.mode.drawFooter(renderedScreen.FilenameText, renderedScreen.StatusText, spinner)
 
+	if spinner != "" {
+		p.screen.SetProgress(twin.ProgressStateIndeterminate, 0)
+	} else {
+		p.screen.SetProgress(twin.ProgressStateRemove, 0)
+	}
+
 	return len(renderedScreen.lines)
 }
 

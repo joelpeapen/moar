@@ -181,10 +181,6 @@ type Status struct {
 
 	// Example: ": 45 lines  51%"
 	StatusText string
-
-	// How far into the input StatusText's last line is, 0-100. Nil when
-	// StatusText doesn't contain a percentage, for example on empty input.
-	Percent *int
 }
 
 // InputLines contains a number of lines from the reader, plus metadata
@@ -337,7 +333,6 @@ func (reader *ReaderImpl) createStatusUnlocked(lastLine linemetadata.Index) Stat
 		status.StatusText += "  "
 	}
 	status.StatusText += fmt.Sprintf("%d%%", percent)
-	status.Percent = &percent
 
 	return status
 }

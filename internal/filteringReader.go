@@ -240,9 +240,8 @@ func (f *FilteringReader) createStatus(lastLine *linemetadata.Index) reader.Stat
 	}
 
 	if lastLine == nil {
-		hundred := 100
 		// 100% because we're showing all 0 lines
-		return reader.Status{StatusText: "Filtered: 0" + baseCountString + " lines  100%", Percent: &hundred}
+		return reader.Status{StatusText: "Filtered: 0" + baseCountString + " lines  100%"}
 	}
 
 	acceptedCount := f.GetLineCount()
@@ -258,7 +257,6 @@ func (f *FilteringReader) createStatus(lastLine *linemetadata.Index) reader.Stat
 	return reader.Status{
 		StatusText: fmt.Sprintf("Filtered: %s%s %s  %d%%",
 			acceptedCountString, baseCountString, lineString, percent),
-		Percent: &percent,
 	}
 }
 
