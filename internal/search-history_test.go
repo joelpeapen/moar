@@ -26,6 +26,25 @@ func TestAddEntryAppendsAfterExistingHistory(t *testing.T) {
 	assert.DeepEqual(t, afterAdd, []string{"before", "after"})
 }
 
+// Committing a search that's already in the history, but isn't the most
+// recent entry, moves it to the end as the newest entry rather than
+// leaving a duplicate behind at its old position.
+func TestAddEntryMovesExistingEntryToEnd(t *testing.T) {
+	// Otherwise BootSearchHistory() will import the real user's less history
+	t.Setenv("LESSHISTFILE", "/dev/null")
+
+	historyFile := filepath.Join(t.TempDir(), "search_history")
+	err := os.WriteFile(historyFile, []byte("one\ntwo\n"), 0o600)
+	assert.NilError(t, err)
+
+	instance := BootSearchHistory(historyFile)
+	instance.addEntry("one")
+
+	afterAdd, err := loadMoorSearchHistory(historyFile)
+	assert.NilError(t, err)
+	assert.DeepEqual(t, afterAdd, []string{"two", "one"})
+}
+
 // Two moor instances sharing a history file should not silently lose each
 // other's committed searches.
 //
