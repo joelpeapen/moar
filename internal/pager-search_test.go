@@ -172,6 +172,59 @@ func TestScrollToNextSearchHit_WrapAfterFound(t *testing.T) {
 	assert.Equal(t, 4, pager.lineIndex().Index())
 }
 
+// Ref: https://github.com/walles/moor/issues/455
+func TestScrollToNextSearchHit_FallsBackToMostRecentHistoryEntry(t *testing.T) {
+	pager := createThreeLinesPager(t)
+	pager.searchHistory.entries = []string{"b", "d"}
+
+	assert.Assert(t, pager.search.Inactive(), "No search should be active yet")
+
+	// Pressing 'n' with no active search should resume the most recently used
+	// search, "d" (ref createThreeLinesPager()), rather than doing nothing
+	pager.scrollToNextSearchHit()
+
+	assert.Equal(t, "d", pager.search.String(), "Should have adopted the most recent history entry")
+	assert.Equal(t, "Viewing", modeName(pager))
+	assert.Equal(t, 3, pager.lineIndex().Index())
+}
+
+// Ref: https://github.com/walles/moor/issues/455
+func TestScrollToPreviousSearchHit_FallsBackToMostRecentHistoryEntry(t *testing.T) {
+	pager := createThreeLinesPager(t)
+	pager.scrollToEnd()
+	pager.searchHistory.entries = []string{"c", "a"}
+
+	assert.Assert(t, pager.search.Inactive(), "No search should be active yet")
+
+	// Pressing 'N' with no active search should resume the most recently used
+	// search, "a" (ref createThreeLinesPager()), searching backwards
+	pager.scrollToPreviousSearchHit()
+
+	assert.Equal(t, "a", pager.search.String(), "Should have adopted the most recent history entry")
+	assert.Equal(t, "Viewing", modeName(pager))
+	assert.Equal(t, 0, pager.lineIndex().Index())
+}
+
+// If the user intentionally clears an active search (as if pressing ESC to
+// un-highlight), pressing 'n' afterwards should resume that same search
+// rather than staying inactive forever.
+//
+// Ref: https://github.com/walles/moor/issues/455
+func TestScrollToNextSearchHit_ResumesSearchFromHistoryAfterClear(t *testing.T) {
+	pager := createThreeLinesPager(t)
+	pager.searchHistory.entries = []string{"d"}
+	pager.search.For("d")
+	pager.search.Clear()
+
+	assert.Assert(t, pager.search.Inactive(), "Search should be inactive after being cleared")
+
+	pager.scrollToNextSearchHit()
+
+	assert.Equal(t, "d", pager.search.String(), "Should have resumed the cleared search from history")
+	assert.Equal(t, "Viewing", modeName(pager))
+	assert.Equal(t, 3, pager.lineIndex().Index())
+}
+
 // Ref: https://github.com/walles/moor/issues/152
 func Test152(t *testing.T) {
 	// Show a pager on a five lines terminal
