@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"unicode"
 
@@ -259,8 +260,7 @@ func removeDupsKeepingLast(history []string) []string {
 	cleanCount := 0
 
 	// Iterate backwards to keep the last occurrence
-	for i := len(history) - 1; i >= 0; i-- {
-		entry := history[i]
+	for _, entry := range slices.Backward(history) {
 		if !seen[entry] {
 			seen[entry] = true
 			cleaned = append(cleaned, entry)
@@ -285,6 +285,19 @@ func (h *SearchHistory) addEntry(entry string) {
 	if len(h.entries) > 0 && h.entries[len(h.entries)-1] == entry {
 		// Same as last entry, do nothing
 		return
+	}
+
+	if h.absFileName != "" {
+		// Other moor instances may have written to this file since we
+		// booted or last wrote to it. Merge those entries in so that we
+		// don't clobber them below.
+		onDisk, err := loadMoorSearchHistory(h.absFileName)
+		if err != nil {
+			log.Infof("Could not re-read search history from %s before updating it: %v", h.absFileName, err)
+		}
+		if onDisk != nil {
+			h.entries = removeDupsKeepingLast(append(onDisk, h.entries...))
+		}
 	}
 
 	// Append the new entry in-memory
