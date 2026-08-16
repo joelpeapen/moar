@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"unicode"
 
@@ -173,11 +174,24 @@ func loadLessSearchHistory() ([]string, error) {
 
 	for _, fileName := range fileNames {
 		lines := []string{}
+		inSearchSection := false
 		err := iterateFileByLines(fileName, func(line string) {
+			if strings.HasPrefix(line, ".") {
+				// Section header, e.g. ".search" or ".shell"
+				inSearchSection = line == ".search"
+				return
+			}
+
+			if !inSearchSection {
+				// Not in the search section, e.g. a shell command
+				return
+			}
+
 			if !strings.HasPrefix(line, "\"") {
 				// Not a search history line
 				return
 			}
+
 			if len(line) > 640 {
 				// Line too long, 640 chars should be enough for anyone
 				return
@@ -259,8 +273,7 @@ func removeDupsKeepingLast(history []string) []string {
 	cleanCount := 0
 
 	// Iterate backwards to keep the last occurrence
-	for i := len(history) - 1; i >= 0; i-- {
-		entry := history[i]
+	for _, entry := range slices.Backward(history) {
 		if !seen[entry] {
 			seen[entry] = true
 			cleaned = append(cleaned, entry)
@@ -285,6 +298,26 @@ func (h *SearchHistory) addEntry(entry string) {
 	if len(h.entries) > 0 && h.entries[len(h.entries)-1] == entry {
 		// Same as last entry, do nothing
 		return
+	}
+
+	if h.absFileName != "" {
+		// Other moor instances may have written to this file since we
+		// booted or last wrote to it. Keep the on-disk order and only
+		// append whatever of our own entries aren't there yet, so that we
+		// neither clobber nor reorder anyone's history.
+		onDisk, err := loadMoorSearchHistory(h.absFileName)
+		if err != nil {
+			log.Infof("Could not re-read search history from %s before updating it: %v", h.absFileName, err)
+		}
+		if onDisk != nil {
+			merged := onDisk
+			for _, ownEntry := range h.entries {
+				if !slices.Contains(merged, ownEntry) {
+					merged = append(merged, ownEntry)
+				}
+			}
+			h.entries = merged
+		}
 	}
 
 	// Append the new entry in-memory

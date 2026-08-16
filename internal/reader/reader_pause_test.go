@@ -68,6 +68,35 @@ func TestPauseAfterNLines(t *testing.T) {
 		"Reader should have the second line after unpausing")
 }
 
+// While the reader is paused during initial loading, the line count is hidden
+// from the status text (it would be misleading, since it's not the final count
+// yet). The filename and the percentage should still be visually separated from
+// each other in that case.
+func TestStatusSeparatorWhilePaused(t *testing.T) {
+	pauseAfterLines := 1
+
+	twoLines := strings.NewReader("one\ntwo\n")
+	testMe, err := NewFromStream(
+		"large-git-log-patch.txt",
+		twoLines,
+		formatters.TTY,
+		ReaderOptions{
+			PauseAfterLines: &pauseAfterLines,
+			Style:           styles.Get("native"),
+		})
+	assert.NilError(t, err)
+
+	// Expect pause since we configured the reader to pause after 1 line ^
+	for testMe.PauseStatus.Load() != true {
+	}
+	assert.Assert(t, testMe.ReadingDone.Load() == false,
+		"Reader should not be done yet, only paused")
+
+	status := testMe.GetLines(linemetadata.Index{}, 2)
+	assert.Equal(t, status.FilenameText, "large-git-log-patch.txt")
+	assert.Equal(t, status.StatusText, ": 100%")
+}
+
 // Test pausing behavior after we're done reading from a file, and then another line is added.
 func TestPauseAfterNLines_Polling(t *testing.T) {
 	pauseAfterLines := 1
@@ -103,29 +132,27 @@ func TestPauseAfterNLines_Polling(t *testing.T) {
 	_, err = file.WriteString("two\n")
 	assert.NilError(t, err)
 
-	// Wait up to two seconds for tailFile() to give us the new line even though
-	// we are paused. That shouldn't happen. If it does we fail here.
-	//
-	// tailFile() polls every second, so two seconds should cover it.
+	// Wait for several tailFile() poll cycles to give us the new line even
+	// though we are paused. That shouldn't happen. If it does we fail here.
 	for range 20 {
 		allLines := testMe.GetLines(linemetadata.Index{}, 10)
 		if len(allLines.Lines) == 2 {
 			assert.Assert(t, false, "Reader should not have received a new line while paused")
 		}
-		time.Sleep(100 * time.Millisecond)
+		time.Sleep(tailPollInterval)
 	}
 
 	// No new line while paused, good! Unpause.
 	testMe.SetPauseAfterLines(99)
 
-	// Give the new line two seconds to arrive
+	// Give the new line a bunch of poll cycles to arrive
 	var bothLines []NumberedLine
 	for range 20 {
 		bothLines = testMe.GetLines(linemetadata.Index{}, 10).Lines
 		if len(bothLines) > 1 {
 			break
 		}
-		time.Sleep(100 * time.Millisecond)
+		time.Sleep(tailPollInterval)
 	}
 
 	// Verify that we have both lines now

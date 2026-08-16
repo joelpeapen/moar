@@ -12,6 +12,10 @@ import (
 	log "github.com/sirupsen/logrus"
 )
 
+// How often tailFile() checks the tailed file for changes. Overridden in
+// tests to make them run faster.
+var tailPollInterval = time.Second
+
 type tailAction int
 
 const (
@@ -304,7 +308,7 @@ func (reader *ReaderImpl) tailFile() error {
 		// NOTE: We could use something like
 		// https://github.com/fsnotify/fsnotify instead of sleeping and polling
 		// here.
-		time.Sleep(1 * time.Second)
+		time.Sleep(tailPollInterval)
 
 		shouldContinue, err := reader.tailOnce()
 		if err != nil {

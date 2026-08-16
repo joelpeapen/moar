@@ -53,6 +53,11 @@ type Screen interface {
 	// For out-of-bounds requests, a space with default style is returned.
 	GetCell(column int, row int) StyledRune
 
+	// Ask the terminal to show a progress bar
+	//
+	// Ref: https://rockorager.dev/misc/osc-9-4-progress-bars/
+	SetProgress(state ProgressState, percent int)
+
 	// Render our contents into the terminal window.
 	//
 	// The first call takes over the terminal: alternate screen, cursor hidden,
@@ -108,6 +113,10 @@ type UnixScreen struct {
 
 	cells        [][]StyledRune
 	lastRendered lastRendered // Kept up to date by snapshotLastRendered()
+
+	// Progress bar state, sent to the terminal on every render. Guarded by
+	// renderLock.
+	progress Progress
 
 	// True while we are on the alternate screen. Guarded by renderLock.
 	alternateScreenActive bool
@@ -320,6 +329,13 @@ func (screen *UnixScreen) markClosedAndLeaveAlternateScreen() {
 
 	screen.closed = true
 	screen.leaveAlternateScreenSessionLocked()
+
+	// Reset progress state so that calling ShowNLines() after Close() won't
+	// leave a progress bar on the screen.
+	screen.progress = Progress{}
+
+	// Restore terminal progress bar. See renderProgress() for details.
+	screen.writeLocked(progressRemoveSequence)
 }
 
 // Does nothing if we're already on the alternate screen, or if the screen is
@@ -1198,6 +1214,8 @@ func (screen *UnixScreen) showNLines(width int, height int, fullScreen bool) {
 		}
 	}
 
+	screen.writeLocked(screen.renderProgressLocked())
+
 	if fullScreen && screen.showNLinesDeltaLocked(width, height) {
 		return
 	}
@@ -1242,6 +1260,11 @@ func (screen *UnixScreen) PauseAndCall(run func() error) error {
 	screen.renderLock.Lock()
 	wasActive := screen.alternateScreenActive
 	screen.leaveAlternateScreenSessionLocked()
+
+	// Drop any progress bar while paused. Will be restored as a side effect of
+	// screen.onWindowResized() below.
+	screen.writeLocked(progressRemoveSequence)
+
 	screen.paused = true
 	screen.renderLock.Unlock()
 

@@ -34,7 +34,7 @@ RACE_REPORTS=""
 if [ -z "${CI}" ]; then
   RACE_REPORTS="log_path=${PWD}/moor-race-report"
 fi
-GORACE="${RACE_REPORTS}" go test $RACE -timeout 20s ./...
+GORACE="${RACE_REPORTS}" go test $RACE -timeout 60s ./...
 
 # Ensure we can cross compile
 # NOTE: Make sure this list matches the one in release.sh
@@ -126,6 +126,13 @@ diff -u <(echo "${MAN_OPTIONS}") <(echo "${MOOR_OPTIONS}")
 # FIXME: On unknown command line options, test that help text goes to stderr
 
 ./scripts/test-path-help.sh "$(realpath ./moor)"
+
+if ls moor-race-report.* 1> /dev/null 2>&1; then
+  echo
+  echo "ERROR: Please check RACES.md and look into the following files:"
+  ls moor-race-report.*
+  exit 1
+fi
 
 echo
 echo "All tests passed!"

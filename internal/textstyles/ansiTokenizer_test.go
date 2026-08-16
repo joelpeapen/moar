@@ -48,19 +48,16 @@ func TestTokenize(t *testing.T) {
 
 	for _, fileName := range getTestFiles(t) {
 		t.Run(fileName, func(t *testing.T) {
-			file, err := os.Open(fileName)
+			fileReader, err := os.Open(fileName)
 			if err != nil {
-				t.Errorf("Error opening file <%s>: %s", fileName, err.Error())
+				t.Errorf("Error opening file <%s>: %v", fileName, err)
 				return
 			}
 			defer func() {
-				if err := file.Close(); err != nil {
-					panic(err)
+				if err := fileReader.Close(); err != nil {
+					t.Errorf("Error closing file <%s>: %v", fileName, err)
 				}
 			}()
-
-			fileReader, err := os.Open(fileName)
-			assert.NilError(t, err)
 
 			fileScanner := bufio.NewScanner(fileReader)
 
@@ -129,6 +126,8 @@ func TestTokenize(t *testing.T) {
 					continue
 				}
 			}
+
+			assert.NilError(t, fileScanner.Err())
 		})
 	}
 }
