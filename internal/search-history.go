@@ -289,14 +289,21 @@ func (h *SearchHistory) addEntry(entry string) {
 
 	if h.absFileName != "" {
 		// Other moor instances may have written to this file since we
-		// booted or last wrote to it. Merge those entries in so that we
-		// don't clobber them below.
+		// booted or last wrote to it. Keep the on-disk order and only
+		// append whatever of our own entries aren't there yet, so that we
+		// neither clobber nor reorder anyone's history.
 		onDisk, err := loadMoorSearchHistory(h.absFileName)
 		if err != nil {
 			log.Infof("Could not re-read search history from %s before updating it: %v", h.absFileName, err)
 		}
 		if onDisk != nil {
-			h.entries = removeDupsKeepingLast(append(onDisk, h.entries...))
+			merged := onDisk
+			for _, ownEntry := range h.entries {
+				if !slices.Contains(merged, ownEntry) {
+					merged = append(merged, ownEntry)
+				}
+			}
+			h.entries = merged
 		}
 	}
 
