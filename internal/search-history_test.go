@@ -89,3 +89,24 @@ func TestAddEntrySurvivesConcurrentInstanceWithExistingHistory(t *testing.T) {
 	assert.NilError(t, err)
 	assert.DeepEqual(t, afterBoth, []string{"old1", "old2", "from-a", "from-b"})
 }
+
+// less stores both search patterns and shell commands in .lesshst, each
+// under its own section header, with entries in both sections sharing the
+// same leading-quote line format. Importing less history should only pick
+// up the .search section, not shell commands from the .shell section.
+func TestLoadLessSearchHistoryIgnoresShellSection(t *testing.T) {
+	lessHistFile := filepath.Join(t.TempDir(), ".lesshst")
+	err := os.WriteFile(lessHistFile, []byte(
+		".less-history-file:\n"+
+			".search\n"+
+			"\"search-term\n"+
+			".shell\n"+
+			"\"shell-command\n",
+	), 0o600)
+	assert.NilError(t, err)
+	t.Setenv("LESSHISTFILE", lessHistFile)
+
+	history, err := loadLessSearchHistory()
+	assert.NilError(t, err)
+	assert.DeepEqual(t, history, []string{"search-term"})
+}

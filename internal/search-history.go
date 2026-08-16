@@ -174,11 +174,24 @@ func loadLessSearchHistory() ([]string, error) {
 
 	for _, fileName := range fileNames {
 		lines := []string{}
+		inSearchSection := false
 		err := iterateFileByLines(fileName, func(line string) {
+			if strings.HasPrefix(line, ".") {
+				// Section header, e.g. ".search" or ".shell"
+				inSearchSection = line == ".search"
+				return
+			}
+
+			if !inSearchSection {
+				// Not in the search section, e.g. a shell command
+				return
+			}
+
 			if !strings.HasPrefix(line, "\"") {
 				// Not a search history line
 				return
 			}
+
 			if len(line) > 640 {
 				// Line too long, 640 chars should be enough for anyone
 				return
