@@ -84,12 +84,9 @@ func PageFromStream(reader io.Reader, options Options) error {
 // Unlike PageFromStream, this function does not require stdout to be a
 // terminal - the caller's custom screen decides where output goes.
 //
-// Note that the caller is responsible for the screen lifecycle (including Close()).
-//
-// PageFromStreamWithScreen blocks until the pager exits (the user presses 'q'
-// or the screen sends an EventExit). Feed events to screen.Events() from
-// another goroutine and run this in its own goroutine if you need concurrent
-// rendering.
+// PageFromStreamWithScreen blocks until the pager exits (the screen sends an EventExit).
+// Feed events to screen.Events() from another goroutine and run this in
+// its own goroutine if you need concurrent rendering.
 func PageFromStreamWithScreen(reader io.Reader, screen twin.Screen, options Options) error {
 	logs := startLogCollection()
 	defer collectLogs(logs)
@@ -197,9 +194,6 @@ func pageFromReader(reader *internalReader.ReaderImpl, options Options) error {
 	return pageFromReaderWithScreen(reader, screen, options)
 }
 
-// pageFromReaderWithScreen is the shared implementation for both the
-// terminal-backed (pageFromReader) and custom-screen (PageFromStreamWithScreen)
-// entry points. The caller owns the screen and is responsible for Close().
 func pageFromReaderWithScreen(reader *internalReader.ReaderImpl, screen twin.Screen, options Options) error {
 	// Closing the reader closes the stream it came from, which is what our
 	// callers promise their callers
