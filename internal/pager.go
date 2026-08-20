@@ -747,6 +747,9 @@ func (p *Pager) StartPaging(screen twin.Screen, chromaStyle *chroma.Style, chrom
 
 			case twin.MouseWheelRight:
 				p.moveRight(p.SideScrollAmount)
+
+			default:
+				log.Warnf("Unhandled mouse buttons: %d", event.Buttons())
 			}
 
 		case twin.EventResize:
