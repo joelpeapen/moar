@@ -2,12 +2,17 @@ package twin
 
 type Event any
 
+// EventRune, EventKeyCode and EventMouse can be constructed directly by
+// embedding applications to feed input into the pager.
+//
+// Ref: https://github.com/walles/moor/pull/456
+
 type EventRune struct {
-	rune rune
+	Rune rune
 }
 
 type EventKeyCode struct {
-	keyCode KeyCode
+	KeyCode KeyCode
 }
 
 type MouseButtonMask uint16
@@ -20,7 +25,7 @@ const (
 )
 
 type EventMouse struct {
-	buttons MouseButtonMask
+	Buttons MouseButtonMask
 }
 
 // After you get this, query Screen.Size() to get the new size
@@ -34,31 +39,4 @@ type EventResize struct {
 // Ref: https://github.com/walles/moor/issues/126
 type EventExit struct {
 	// This interface intentionally left blank
-}
-
-func (eventRune *EventRune) Rune() rune {
-	return eventRune.rune
-}
-
-func (eventKeyCode *EventKeyCode) KeyCode() KeyCode {
-	return eventKeyCode.keyCode
-}
-
-func (eventMouse *EventMouse) Buttons() MouseButtonMask {
-	return eventMouse.buttons
-}
-
-// The following NewEvent* functions are meant to be used by embedding applications
-// to feed input into the pager.
-
-func NewEventRune(r rune) EventRune {
-	return EventRune{rune: r}
-}
-
-func NewEventKeyCode(keyCode KeyCode) EventKeyCode {
-	return EventKeyCode{keyCode: keyCode}
-}
-
-func NewEventMouse(buttons MouseButtonMask) EventMouse {
-	return EventMouse{buttons: buttons}
 }
