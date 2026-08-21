@@ -58,9 +58,29 @@ func (p *Pager) scrollToSearchHits() {
 	p.centerSearchHitsVertically()
 }
 
+// If there's no active search pattern, adopt the most recently used entry
+// from the search history, as though the user had just searched for it. This
+// lets 'n' / 'N' repeat the last search even in a fresh pager instance, or
+// after an active search was intentionally cleared, as long as history exists.
+//
+// Returns false if there's no active search and no history to fall back on.
+func (p *Pager) ensureSearchFromHistory() bool {
+	if p.search.Active() {
+		return true
+	}
+
+	if p.searchHistory == nil || len(p.searchHistory.entries) == 0 {
+		return false
+	}
+
+	mostRecent := p.searchHistory.entries[len(p.searchHistory.entries)-1]
+	p.search.For(mostRecent)
+	return true
+}
+
 // Scroll to the next search hit, when the user presses 'n'.
 func (p *Pager) scrollToNextSearchHit() {
-	if p.search.Inactive() {
+	if !p.ensureSearchFromHistory() {
 		// Nothing to search for, never mind
 		return
 	}
@@ -175,7 +195,7 @@ func (p *Pager) scrollToSearchHitsBackwards() {
 
 // Scroll backwards to the previous search hit, when the user presses 'N'.
 func (p *Pager) scrollToPreviousSearchHit() {
-	if p.search.Inactive() {
+	if !p.ensureSearchFromHistory() {
 		// Nothing to search for, never mind
 		return
 	}
