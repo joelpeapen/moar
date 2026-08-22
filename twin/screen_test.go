@@ -26,20 +26,20 @@ func assertEncode(t *testing.T, incomingString string, expectedEvent Event, expe
 }
 
 func TestConsumeEncodedEvent(t *testing.T) {
-	assertEncode(t, "a", EventRune{Rune: 'a'}, "")
-	assertEncode(t, "\r", EventKeyCode{KeyCode: KeyEnter}, "")
-	assertEncode(t, "\x1b", EventKeyCode{KeyCode: KeyEscape}, "")
+	assertEncode(t, "a", EventRune{rune: 'a'}, "")
+	assertEncode(t, "\r", EventKeyCode{keyCode: KeyEnter}, "")
+	assertEncode(t, "\x1b", EventKeyCode{keyCode: KeyEscape}, "")
 
 	// Implicitly test having a remaining rune at the end
-	assertEncode(t, "\x1b[Ax", EventKeyCode{KeyCode: KeyUp}, "x")
+	assertEncode(t, "\x1b[Ax", EventKeyCode{keyCode: KeyUp}, "x")
 
-	assertEncode(t, "\x1b[<64;127;41M", EventMouse{Buttons: MouseWheelUp}, "")
-	assertEncode(t, "\x1b[<65;127;41M", EventMouse{Buttons: MouseWheelDown}, "")
+	assertEncode(t, "\x1b[<64;127;41M", EventMouse{buttons: MouseWheelUp}, "")
+	assertEncode(t, "\x1b[<65;127;41M", EventMouse{buttons: MouseWheelDown}, "")
 
 	// This happens when users paste.
 	//
 	// Ref: https://github.com/walles/moor/issues/73
-	assertEncode(t, "1234", EventRune{Rune: '1'}, "234")
+	assertEncode(t, "1234", EventRune{rune: '1'}, "234")
 }
 
 func TestConsumeEncodedEventWithUnsupportedEscapeCode(t *testing.T) {

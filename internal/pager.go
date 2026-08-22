@@ -724,16 +724,16 @@ func (p *Pager) StartPaging(screen twin.Screen, chromaStyle *chroma.Style, chrom
 
 		switch event := event.(type) {
 		case twin.EventKeyCode:
-			log.Tracef("Handling key event %d...", event.KeyCode)
-			p.mode.onKey(event.KeyCode)
+			log.Tracef("Handling key event %d...", event.KeyCode())
+			p.mode.onKey(event.KeyCode())
 
 		case twin.EventRune:
-			log.Tracef("Handling rune event '%c'/0x%04x...", event.Rune, event.Rune)
-			p.mode.onRune(event.Rune)
+			log.Tracef("Handling rune event '%c'/0x%04x...", event.Rune(), event.Rune())
+			p.mode.onRune(event.Rune())
 
 		case twin.EventMouse:
-			log.Tracef("Handling mouse event %d...", event.Buttons)
-			switch event.Buttons {
+			log.Tracef("Handling mouse event %d...", event.Buttons())
+			switch event.Buttons() {
 			case twin.MouseWheelUp:
 				// Clipping is done in _Redraw()
 				p.scrollPosition = p.scrollPosition.PreviousLine(1)
@@ -749,7 +749,7 @@ func (p *Pager) StartPaging(screen twin.Screen, chromaStyle *chroma.Style, chrom
 				p.moveRight(p.SideScrollAmount)
 
 			default:
-				log.Warnf("Unhandled mouse buttons: %d", event.Buttons)
+				log.Warnf("Unhandled mouse buttons: %d", event.Buttons())
 			}
 
 		case twin.EventResize:

@@ -615,7 +615,7 @@ func (screen *UnixScreen) mainLoop() {
 
 			// Intercept Ctrl-Z and handle suspend/resume automatically
 			if runeEvent, ok := (*event).(EventRune); ok {
-				if runeEvent.Rune == '\x1a' {
+				if runeEvent.rune == '\x1a' {
 					log.Info("Twin: Ctrl-Z detected, suspending...")
 
 					err := screen.suspend()
@@ -675,11 +675,11 @@ func consumeEncodedEvent(encodedEventSequences string) (*Event, string) {
 	mouseMatch := mouseEventRegex.FindStringSubmatch(encodedEventSequences)
 	if mouseMatch != nil {
 		if mouseMatch[1] == "64" {
-			var event Event = EventMouse{Buttons: MouseWheelUp}
+			var event Event = EventMouse{buttons: MouseWheelUp}
 			return &event, strings.TrimPrefix(encodedEventSequences, mouseMatch[0])
 		}
 		if mouseMatch[1] == "65" {
-			var event Event = EventMouse{Buttons: MouseWheelDown}
+			var event Event = EventMouse{buttons: MouseWheelDown}
 			return &event, strings.TrimPrefix(encodedEventSequences, mouseMatch[0])
 		}
 
@@ -719,7 +719,7 @@ func consumeEncodedEvent(encodedEventSequences string) (*Event, string) {
 	}
 
 	// Report the single rune
-	var event Event = EventRune{Rune: runes[0]}
+	var event Event = EventRune{rune: runes[0]}
 	return &event, string(runes[1:])
 }
 
