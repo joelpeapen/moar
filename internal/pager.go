@@ -420,6 +420,7 @@ func (p *Pager) moveRight(delta int) {
 	}
 }
 
+// Reader returns the currently active reader, never nil.
 func (p *Pager) Reader() reader.Reader {
 	if p.isShowingHelp {
 		return _HelpReader

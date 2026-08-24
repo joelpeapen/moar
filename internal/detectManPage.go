@@ -12,10 +12,6 @@ const manPageDetectionLines = 14
 
 func (p *Pager) haveLoadedManPage() bool {
 	reader := p.Reader()
-	if reader == nil {
-		return false
-	}
-
 	for _, line := range reader.GetLines(linemetadata.Index{}, manPageDetectionLines).Lines {
 		if line.Line.HasManPageFormatting() {
 			return true
