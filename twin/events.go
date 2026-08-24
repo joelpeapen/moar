@@ -47,3 +47,18 @@ func (eventKeyCode *EventKeyCode) KeyCode() KeyCode {
 func (eventMouse *EventMouse) Buttons() MouseButtonMask {
 	return eventMouse.buttons
 }
+
+// The following NewEvent* functions are meant to be used by embedding applications
+// to feed input into the pager.
+
+func NewEventRune(r rune) EventRune {
+	return EventRune{rune: r}
+}
+
+func NewEventKeyCode(keyCode KeyCode) EventKeyCode {
+	return EventKeyCode{keyCode: keyCode}
+}
+
+func NewEventMouse(buttons MouseButtonMask) EventMouse {
+	return EventMouse{buttons: buttons}
+}
