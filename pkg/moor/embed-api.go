@@ -75,14 +75,14 @@ func PageFromStream(reader io.Reader, options Options) error {
 	return pageFromReader(pagerReader, options)
 }
 
-// PageFromStreamWithScreen is like PageFromStream but lets the caller provide
-// a custom twin.Screen implementation instead of allocating one from the real
+// PageFromStreamWithScreen is like PageFromStream but lets the caller provide a
+// custom twin.Screen implementation instead of allocating one from the real
 // terminal. This enables embedding moor inside another TUI (e.g. a bubbletea
 // app): the caller implements twin.Screen to render moor's output into a pane
 // and feed keyboard/mouse events from the host TUI's event loop.
 //
-// Unlike PageFromStream, this function does not require stdout to be a
-// terminal - the caller's custom screen decides where output goes.
+// Unlike PageFromStream, this function does not require stdout to be a terminal
+// - the caller's custom screen decides where output goes.
 //
 // The caller owns the screen and is responsible for closing it; moor will not
 // call screen.Close().
@@ -91,9 +91,11 @@ func PageFromStream(reader io.Reader, options Options) error {
 // leftover output to the real stdout on the way out, which assumes moor owns
 // the real terminal.
 //
-// PageFromStreamWithScreen blocks until the pager exits (the screen sends an EventExit).
-// Feed events to screen.Events() from another goroutine and run this in
-// its own goroutine if you need concurrent rendering.
+// This function blocks until the pager exits, either because of user input
+// (e.g. pressing 'q') or because the caller pushes a twin.EventExit into
+// screen.Events() — the same channel keyboard, mouse, and other events should
+// be fed into from another goroutine. Run this in its own goroutine if you need
+// concurrent rendering.
 func PageFromStreamWithScreen(reader io.Reader, screen twin.Screen, options Options) error {
 	if options.QuitIfOneScreen {
 		return fmt.Errorf("QuitIfOneScreen is not supported together with a caller-supplied screen")
