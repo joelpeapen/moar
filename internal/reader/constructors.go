@@ -48,8 +48,7 @@ func NewFromFilename(filename string, formatter chroma.Formatter, options Reader
 	returnMe.lastStat = initialStat
 
 	// Ensure the display name matches the highlighting name (e.g. without .gz)
-	basename := filepath.Base(highlightingFilename)
-	returnMe.DisplayName = &basename
+	returnMe.DisplayName = new(filepath.Base(highlightingFilename))
 
 	returnMe.IsCompressed = (filename != highlightingFilename)
 
@@ -128,8 +127,7 @@ func newReaderFromStream(reader io.Reader, originalFileName *string, formatter c
 	}
 	var displayFileName *string
 	if originalFileName != nil {
-		basename := filepath.Base(*originalFileName)
-		displayFileName = &basename
+		displayFileName = new(filepath.Base(*originalFileName))
 	}
 	streamCloser, _ := reader.(io.Closer)
 	returnMe := ReaderImpl{
@@ -194,8 +192,7 @@ func NewFromTextForTesting(name string, text string) *ReaderImpl {
 	lines := []*Line{}
 	if len(noExternalNewlines) > 0 {
 		for lineString := range strings.SplitSeq(noExternalNewlines, "\n") {
-			line := Line{raw: []byte(lineString)}
-			lines = append(lines, &line)
+			lines = append(lines, new(Line{raw: []byte(lineString)}))
 		}
 	}
 	readingDone := atomic.Bool{}

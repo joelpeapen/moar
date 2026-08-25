@@ -174,12 +174,9 @@ func TestIssue399(t *testing.T) {
 	pager := NewPager(r)
 
 	spci := scrollPositionInternal{
-		lineIndex: func(i int) *linemetadata.Index {
-			idx := linemetadata.IndexFromZeroBased(i)
-			return &idx
-		}(900),
-		delta: 569,
-		name:  "scrollToSearchHits",
+		lineIndex: new(linemetadata.IndexFromZeroBased(900)),
+		delta:     569,
+		name:      "scrollToSearchHits",
 	}
 
 	pager.scrollPosition = scrollPosition{
@@ -220,12 +217,9 @@ func TestIssue415Panic(t *testing.T) {
 	pager := NewPager(r)
 	pager.filteringReader.BackingReader = &shrinkingReader{Reader: r}
 	spci := scrollPositionInternal{
-		lineIndex: func(i int) *linemetadata.Index {
-			idx := linemetadata.IndexFromZeroBased(i)
-			return &idx
-		}(10), // start out of bounds (past what the reader claims it has)
-		delta: 0,
-		name:  "test415",
+		lineIndex: new(linemetadata.IndexFromZeroBased(10)), // start out of bounds (past what the reader claims it has)
+		delta:     0,
+		name:      "test415",
 	}
 
 	pager.scrollPosition = scrollPosition{

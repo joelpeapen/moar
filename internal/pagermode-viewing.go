@@ -173,16 +173,14 @@ func (m PagerModeViewing) onRune(char rune) {
 		p.search.Clear()
 
 		// Searchers want to scan the whole file, start reading as much as we can
-		reallyHigh := linemetadata.IndexMax()
-		p.setTargetLine(&reallyHigh)
+		p.setTargetLine(new(linemetadata.IndexMax()))
 
 	case '?':
 		p.mode = NewPagerModeSearch(p, SearchDirectionBackward, p.scrollPosition)
 		p.search.Clear()
 
 		// Searchers want to scan the whole file, start reading as much as we can
-		reallyHigh := linemetadata.IndexMax()
-		p.setTargetLine(&reallyHigh)
+		p.setTargetLine(new(linemetadata.IndexMax()))
 
 	case '&':
 		if !p.isShowingHelp {

@@ -218,8 +218,7 @@ func (si *scrollPositionInternal) handlePositiveDelta(pager *Pager) {
 			return
 		}
 
-		nextLineIndex := si.lineIndex.NonWrappingAdd(1)
-		si.lineIndex = &nextLineIndex
+		si.lineIndex = new(si.lineIndex.NonWrappingAdd(1))
 		si.delta -= linemetadata.ScreenLines(len(subLines))
 	}
 }
@@ -376,8 +375,7 @@ func (p *Pager) scrollToEnd() {
 		//
 		// Otherwise, if we're already aiming for some place, don't overwrite
 		// that.
-		maxLineIndex := linemetadata.IndexMax()
-		p.setTargetLine(&maxLineIndex)
+		p.setTargetLine(new(linemetadata.IndexMax()))
 	}
 }
 
@@ -425,8 +423,7 @@ func (p *Pager) getLastVisibleLineIndex() *linemetadata.Index {
 		return nil
 	}
 
-	lastRenderedLine := rendered.lines[len(rendered.lines)-1]
-	return &lastRenderedLine.inputLineIndex
+	return new(rendered.lines[len(rendered.lines)-1].inputLineIndex)
 }
 
 // getMaxNumberPrefixLength returns the maximum line number prefix length

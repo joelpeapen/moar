@@ -25,11 +25,9 @@ func TestIssue426SwitchingToSmallerFileClearsStaleScrollPosition(t *testing.T) {
 
 	// This matches the stale post-switch state from issue #426: the reader has
 	// moved to a shorter file, but the scroll position still points below it.
-	staleIndex := linemetadata.IndexFromZeroBased(70)
-	staleIndexPtr := &staleIndex
 	pager.scrollPosition = scrollPosition{
 		internalDontTouch: scrollPositionInternal{
-			lineIndex: staleIndexPtr,
+			lineIndex: new(linemetadata.IndexFromZeroBased(70)),
 			delta:     0,
 			name:      "Issue 426 stale file switch",
 		},

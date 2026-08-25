@@ -59,8 +59,7 @@ func parseLineNumber(withoutPlus string) *linemetadata.Index {
 		lineNumber = 1
 	}
 
-	targetIndex := linemetadata.IndexFromOneBased(int(lineNumber))
-	return &targetIndex
+	return new(linemetadata.IndexFromOneBased(int(lineNumber)))
 }
 
 func parseSearchPattern(withoutPlus string) *string {
@@ -68,6 +67,5 @@ func parseSearchPattern(withoutPlus string) *string {
 		return nil
 	}
 
-	pattern := withoutPlus[1:]
-	return &pattern
+	return new(withoutPlus[1:])
 }

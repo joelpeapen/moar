@@ -477,8 +477,7 @@ func (s *styledStringSplitter) handleURL() error {
 
 			// End of URL
 			urlEndIndexExclusive := s.nextByteIndex - 2
-			url := s.input[urlStartIndex:urlEndIndexExclusive]
-			s.startNewPart(s.inProgressStyle.WithHyperlink(&url))
+			s.startNewPart(s.inProgressStyle.WithHyperlink(new(s.input[urlStartIndex:urlEndIndexExclusive])))
 			return nil
 		}
 
@@ -492,8 +491,7 @@ func (s *styledStringSplitter) handleURL() error {
 		if char == '\x07' {
 			// End of URL
 			urlEndIndexExclusive := s.nextByteIndex - 1
-			url := s.input[urlStartIndex:urlEndIndexExclusive]
-			s.startNewPart(s.inProgressStyle.WithHyperlink(&url))
+			s.startNewPart(s.inProgressStyle.WithHyperlink(new(s.input[urlStartIndex:urlEndIndexExclusive])))
 			return nil
 		}
 

@@ -874,9 +874,7 @@ func parseTerminalBgColorResponse(responseBytes []byte) (*Color, bool) {
 		return nil, false // Invalid
 	}
 
-	color := NewColor24Bit(uint8(red/256), uint8(green/256), uint8(blue/256))
-
-	return &color, true // Valid
+	return new(NewColor24Bit(uint8(red/256), uint8(green/256), uint8(blue/256))), true // Valid
 }
 
 func (screen *UnixScreen) SetCell(column int, row int, styledRune StyledRune) int {

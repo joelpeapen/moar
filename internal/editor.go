@@ -118,8 +118,7 @@ func middleVisibleLine(p *Pager) *linemetadata.Index {
 		return nil
 	}
 
-	middle := lines[len(lines)/2].inputLineIndex
-	return &middle
+	return new(lines[len(lines)/2].inputLineIndex)
 }
 
 // check if the editor can accept "+LINENUMBER" argument

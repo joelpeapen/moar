@@ -264,8 +264,7 @@ func configureHighlighting(terminalBackground *twin.Color, configureSearchHitLin
 	if plainBg != twin.ColorDefault && hitBg != twin.ColorDefault {
 		// We have two real colors. Mix them! I got to "0.2" by testing some
 		// numbers. 0.2 is visible but not too strong.
-		mixed := plainBg.Mix(hitBg, 0.2)
-		theme.searchHitLineBackground = &mixed
+		theme.searchHitLineBackground = new(plainBg.Mix(hitBg, 0.2))
 
 		log.Trace("Search hit line background set to mixed color: ", *theme.searchHitLineBackground)
 	} else {
