@@ -59,10 +59,9 @@ func BenchmarkFilterHugeFile(b *testing.B) {
 	input := reader.NewFromTextForTesting("BenchmarkFilterHugeFile()", text)
 	assert.NilError(b, input.Wait())
 
-	filterTerm := search.For("Periodic")
 	fr := FilteringReader{
 		BackingReader: input,
-		Filter:        &filterTerm,
+		Filter:        new(search.For("Periodic")),
 	}
 	fr.rebuildCache() // warmup
 

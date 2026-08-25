@@ -263,8 +263,7 @@ func NewPager(readers ...*reader.ReaderImpl) *Pager {
 		Filter:        &pager.filter,
 	}
 
-	searchHistory := BootSearchHistory("")
-	pager.searchHistory = &searchHistory
+	pager.searchHistory = new(BootSearchHistory(""))
 
 	return &pager
 }
@@ -471,8 +470,7 @@ func (p *Pager) handleScrolledUp() {
 func (p *Pager) handleScrolledDown() {
 	if p.isScrolledToEnd() {
 		// Follow output
-		reallyHigh := linemetadata.IndexMax()
-		p.setTargetLine(&reallyHigh)
+		p.setTargetLine(new(linemetadata.IndexMax()))
 	} else {
 		p.setTargetLine(nil)
 	}

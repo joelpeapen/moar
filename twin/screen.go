@@ -180,20 +180,20 @@ func NewScreenWithMouseModeAndColorCount(mouseMode MouseMode, terminalColorCount
 	screen := UnixScreen{
 		terminalColorCount: terminalColorCount,
 		mouseMode:          mouseMode,
-	}
 
-	// The number "80" here is from manual testing on my MacBook:
-	//
-	// First, start "./moor.sh sample-files/large-git-log-patch.txt".
-	//
-	// Then do a two finger flick initiating a momentum based scroll-up.
-	//
-	// Now, if you get "Events buffer full" warnings, the buffer is too small.
-	//
-	// By this definition, 40 was too small, and 80 was OK.
-	//
-	// Bumped to 160 because of: https://github.com/walles/moor/issues/164
-	screen.events = make(chan Event, 160)
+		// The number "80" here is from manual testing on my MacBook:
+		//
+		// First, start "./moor.sh sample-files/large-git-log-patch.txt".
+		//
+		// Then do a two finger flick initiating a momentum based scroll-up.
+		//
+		// Now, if you get "Events buffer full" warnings, the buffer is too small.
+		//
+		// By this definition, 40 was too small, and 80 was OK.
+		//
+		// Bumped to 160 because of: https://github.com/walles/moor/issues/164
+		events: make(chan Event, 160),
+	}
 
 	screen.setupSigwinchNotification()
 	err := screen.setupTtyInTtyOut()
@@ -874,9 +874,7 @@ func parseTerminalBgColorResponse(responseBytes []byte) (*Color, bool) {
 		return nil, false // Invalid
 	}
 
-	color := NewColor24Bit(uint8(red/256), uint8(green/256), uint8(blue/256))
-
-	return &color, true // Valid
+	return new(NewColor24Bit(uint8(red/256), uint8(green/256), uint8(blue/256))), true // Valid
 }
 
 func (screen *UnixScreen) SetCell(column int, row int, styledRune StyledRune) int {

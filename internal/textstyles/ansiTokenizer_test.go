@@ -71,8 +71,7 @@ func TestTokenize(t *testing.T) {
 				if lineIndex == nil {
 					lineIndex = &linemetadata.Index{}
 				} else {
-					next := lineIndex.NonWrappingAdd(1)
-					lineIndex = &next
+					lineIndex = new(lineIndex.NonWrappingAdd(1))
 				}
 
 				var loglines strings.Builder

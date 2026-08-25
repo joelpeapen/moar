@@ -273,8 +273,7 @@ func (p *Pager) renderLine(line reader.NumberedLine, numberPrefixLength int, hig
 
 	rendered := make([]renderedLine, 0)
 	for wrapIndex, subLine := range wrapped {
-		lineNumber := line.Number
-		visibleLineNumber := &lineNumber
+		visibleLineNumber := new(line.Number)
 		if wrapIndex > 0 {
 			visibleLineNumber = nil
 		}
@@ -323,12 +322,9 @@ func (p *Pager) decorateLine(lineNumberToShow *linemetadata.Number, numberPrefix
 	canScrollRight := false
 	for i, char := range contents {
 		if firstVisibleRuneIndex == nil && screenColumn >= p.leftColumnZeroBased {
-			// Found the first fully visible rune. We need to point to a copy of
-			// our loop variable, not the loop variable itself. Just pointing to
-			// i, will make firstVisibleRuneIndex point to a new value for every
-			// iteration of the loop.
-			copyOfI := i
-			firstVisibleRuneIndex = &copyOfI
+			// Found the first fully visible rune. new(i) gives us a fresh
+			// address each iteration, rather than aliasing the loop variable.
+			firstVisibleRuneIndex = new(i)
 			if i > 0 && screenColumn > p.leftColumnZeroBased && contents[i-1].Width() > 1 {
 				// We had to cut a rune in half at the start
 				cutOffRuneToTheLeft = true

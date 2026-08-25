@@ -15,23 +15,26 @@ const screenHeight = 60
 
 // Repro for: https://github.com/walles/moor/issues/166
 func testCanonicalize1000(t *testing.T, withStatusBar bool, currentStartLine linemetadata.Index, lastVisibleLine linemetadata.Index) {
-	pager := Pager{}
-	pager.screen = twin.NewFakeScreen(100, screenHeight)
-	pager.readers = []*reader.ReaderImpl{reader.NewFromTextForTesting("test", strings.Repeat("a\n", 2000))}
+	pager := Pager{
+		screen: twin.NewFakeScreen(100, screenHeight),
+		readers: []*reader.ReaderImpl{
+			reader.NewFromTextForTesting("test", strings.Repeat("a\n", 2000)),
+		},
+		ShowLineNumbers: true,
+		showLineNumbers: true,
+		ShowStatusBar:   withStatusBar,
+		scrollPosition: scrollPosition{
+			internalDontTouch: scrollPositionInternal{
+				lineIndex:      &currentStartLine,
+				delta:          0,
+				name:           "findFirstHit",
+				canonicalizing: false,
+			},
+		},
+	}
 	pager.filteringReader = FilteringReader{
 		BackingReader: pager.readers[pager.currentReader],
 		Filter:        &pager.filter,
-	}
-	pager.ShowLineNumbers = true
-	pager.showLineNumbers = true
-	pager.ShowStatusBar = withStatusBar
-	pager.scrollPosition = scrollPosition{
-		internalDontTouch: scrollPositionInternal{
-			lineIndex:      &currentStartLine,
-			delta:          0,
-			name:           "findFirstHit",
-			canonicalizing: false,
-		},
 	}
 
 	lastVisiblePosition := scrollPosition{
@@ -71,22 +74,22 @@ func TestCanonicalize1000WithoutStatusBar(t *testing.T) {
 // lines of input.
 func tryScrollAmount(t *testing.T, scrollFrom linemetadata.Index, scrollDistance linemetadata.ScreenLines) {
 	// Create 1492 lines of single-char content
-	pager := Pager{}
-	pager.screen = twin.NewFakeScreen(80, screenHeight)
-	pager.readers = []*reader.ReaderImpl{reader.NewFromTextForTesting("test", strings.Repeat("x\n", 1492))}
+	pager := Pager{
+		screen:          twin.NewFakeScreen(80, screenHeight),
+		readers:         []*reader.ReaderImpl{reader.NewFromTextForTesting("test", strings.Repeat("x\n", 1492))},
+		ShowLineNumbers: true,
+		showLineNumbers: true,
+		scrollPosition: scrollPosition{
+			internalDontTouch: scrollPositionInternal{
+				name:      "tryScrollAmount",
+				lineIndex: &scrollFrom,
+				delta:     scrollDistance,
+			},
+		},
+	}
 	pager.filteringReader = FilteringReader{
 		BackingReader: pager.readers[pager.currentReader],
 		Filter:        &pager.filter,
-	}
-	pager.ShowLineNumbers = true
-	pager.showLineNumbers = true
-
-	pager.scrollPosition = scrollPosition{
-		internalDontTouch: scrollPositionInternal{
-			name:      "tryScrollAmount",
-			lineIndex: &scrollFrom,
-			delta:     scrollDistance,
-		},
 	}
 
 	// Trigger rendering (and canonicalization). If the prefix is miscomputed
@@ -174,12 +177,9 @@ func TestIssue399(t *testing.T) {
 	pager := NewPager(r)
 
 	spci := scrollPositionInternal{
-		lineIndex: func(i int) *linemetadata.Index {
-			idx := linemetadata.IndexFromZeroBased(i)
-			return &idx
-		}(900),
-		delta: 569,
-		name:  "scrollToSearchHits",
+		lineIndex: new(linemetadata.IndexFromZeroBased(900)),
+		delta:     569,
+		name:      "scrollToSearchHits",
 	}
 
 	pager.scrollPosition = scrollPosition{
@@ -220,12 +220,9 @@ func TestIssue415Panic(t *testing.T) {
 	pager := NewPager(r)
 	pager.filteringReader.BackingReader = &shrinkingReader{Reader: r}
 	spci := scrollPositionInternal{
-		lineIndex: func(i int) *linemetadata.Index {
-			idx := linemetadata.IndexFromZeroBased(i)
-			return &idx
-		}(10), // start out of bounds (past what the reader claims it has)
-		delta: 0,
-		name:  "test415",
+		lineIndex: new(linemetadata.IndexFromZeroBased(10)), // start out of bounds (past what the reader claims it has)
+		delta:     0,
+		name:      "test415",
 	}
 
 	pager.scrollPosition = scrollPosition{

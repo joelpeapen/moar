@@ -556,8 +556,7 @@ func (reader *ReaderImpl) PumpToStdout() {
 func (reader *ReaderImpl) setText(text string) {
 	lines := []*Line{}
 	for lineString := range strings.SplitSeq(text, "\n") {
-		line := Line{raw: []byte(lineString)}
-		lines = append(lines, &line)
+		lines = append(lines, new(Line{raw: []byte(lineString)}))
 	}
 
 	if len(lines) > 0 && strings.HasSuffix(text, "\n") {

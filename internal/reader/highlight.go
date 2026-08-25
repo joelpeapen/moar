@@ -66,9 +66,8 @@ func Highlight(text string, style chroma.Style, formatter chroma.Formatter, lexe
 	// (always?) puts one of those by itself on the last line, making us believe
 	// there is one line too many.
 	sgrReset := "\x1b[0m"
-	trimmed := strings.TrimSuffix(highlighted, sgrReset)
 
-	return &trimmed, nil
+	return new(strings.TrimSuffix(highlighted, sgrReset)), nil
 }
 
 // Reports whether every visible character of some highlighted text looks the
