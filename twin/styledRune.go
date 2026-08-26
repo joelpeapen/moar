@@ -2,6 +2,7 @@ package twin
 
 import (
 	"fmt"
+	"slices"
 	"unicode"
 
 	"github.com/rivo/uniseg"
@@ -38,8 +39,7 @@ func (styledRune StyledRune) Equal(other StyledRune) bool {
 
 // Returns a slice of cells with trailing whitespace cells removed
 func TrimSpaceRight(runes []StyledRune) []StyledRune {
-	for i := len(runes) - 1; i >= 0; i-- {
-		cell := runes[i]
+	for i, cell := range slices.Backward(runes) {
 		if !unicode.IsSpace(cell.Rune) {
 			return runes[0 : i+1]
 		}

@@ -772,8 +772,7 @@ func TestHandleMoreLinesAvailableWithEmptyFile(t *testing.T) {
 	pager := NewPager(emptyReader)
 
 	// Simulate --follow mode by setting target to max
-	targetLine := linemetadata.IndexMax()
-	pager.TargetLine = &targetLine
+	pager.TargetLine = new(linemetadata.IndexMax())
 
 	// This should not crash when lineCount is 0
 	pager.handleMoreLinesAvailable()

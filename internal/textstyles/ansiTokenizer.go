@@ -824,8 +824,7 @@ func consumeCompositeColor(numbers []uint, index int) (int, *twin.Color, error) 
 
 		colorNumber := numbers[index]
 
-		colorValue := twin.NewColor256(uint8(colorNumber))
-		return index + 1, &colorValue, nil
+		return index + 1, new(twin.NewColor256(uint8(colorNumber))), nil
 	}
 
 	if numbers[index] == 2 {
@@ -845,9 +844,7 @@ func consumeCompositeColor(numbers []uint, index int) (int, *twin.Color, error) 
 		gValue := uint8(numbers[gIndex])
 		bValue := uint8(numbers[bIndex])
 
-		colorValue := twin.NewColor24Bit(rValue, gValue, bValue)
-
-		return bIndex + 1, &colorValue, nil
+		return bIndex + 1, new(twin.NewColor24Bit(rValue, gValue, bValue)), nil
 	}
 
 	err := fmt.Errorf(

@@ -1,6 +1,9 @@
 package util
 
-import "fmt"
+import (
+	"fmt"
+	"slices"
+)
 
 // Formats a positive number into a string with _ between each three-group of
 // digits, for numbers >= 10_000.
@@ -16,8 +19,7 @@ func FormatInt(i int) string {
 
 	chars := []rune(fmt.Sprint(i))
 	addCount := 0
-	for i := len(chars) - 1; i >= 0; i-- {
-		char := chars[i]
+	for _, char := range slices.Backward(chars) {
 		if len(result) > 0 && addCount%3 == 0 {
 			result = "_" + result
 		}

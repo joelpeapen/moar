@@ -75,6 +75,49 @@ func PageFromStream(reader io.Reader, options Options) error {
 	return pageFromReader(pagerReader, options)
 }
 
+// PageFromStreamWithScreen is like PageFromStream but lets the caller provide a
+// custom twin.Screen implementation instead of allocating one from the real
+// terminal. This enables embedding moor inside another TUI (e.g. a bubbletea
+// app): the caller implements twin.Screen to render moor's output into a pane
+// and feed keyboard/mouse events from the host TUI's event loop.
+//
+// Unlike PageFromStream, this function does not require stdout to be a terminal
+// - the caller's custom screen decides where output goes.
+//
+// The caller owns the screen and is responsible for closing it; moor will not
+// call screen.Close().
+//
+// options.QuitIfOneScreen is not supported here: it's built around printing
+// leftover output to the real stdout on the way out, which assumes moor owns
+// the real terminal.
+//
+// This function blocks until the pager exits, either because of user input
+// (e.g. pressing 'q') or because the caller pushes a twin.EventExit into
+// screen.Events() — the same channel keyboard, mouse, and other events should
+// be fed into from another goroutine. Run this in its own goroutine if you need
+// concurrent rendering.
+func PageFromStreamWithScreen(reader io.Reader, screen twin.Screen, options Options) error {
+	if options.QuitIfOneScreen {
+		return fmt.Errorf("QuitIfOneScreen is not supported together with a caller-supplied screen")
+	}
+
+	logs := startLogCollection()
+	defer collectLogs(logs)
+
+	pagerReader, err := internalReader.NewFromStream(
+		options.Title,
+		reader,
+		getColorFormatter(),
+		internalReader.ReaderOptions{
+			ShouldFormat: !options.NoAutoFormat,
+		})
+	if err != nil {
+		return err
+	}
+
+	return pageFromReaderWithScreen(pagerReader, screen, false, options)
+}
+
 // If stdout is not a terminal, the file contents will just be printed to
 // stdout.
 func PageFromFile(name string, options Options) error {
@@ -156,6 +199,18 @@ func getColorFormatter() chroma.Formatter {
 }
 
 func pageFromReader(reader *internalReader.ReaderImpl, options Options) error {
+	screen, e := twin.NewScreen()
+	if e != nil {
+		// Screen setup failed
+		return e
+	}
+	return pageFromReaderWithScreen(reader, screen, true, options)
+}
+
+// shouldCloseScreen is true only when moor allocated the screen itself, and
+// false when the screen came from an external caller, since callers own the
+// lifecycle of screens they supply.
+func pageFromReaderWithScreen(reader *internalReader.ReaderImpl, screen twin.Screen, shouldCloseScreen bool, options Options) error {
 	// Closing the reader closes the stream it came from, which is what our
 	// callers promise their callers
 	defer reader.Close()
@@ -164,12 +219,6 @@ func pageFromReader(reader *internalReader.ReaderImpl, options Options) error {
 	pager.WrapLongLines = options.WrapLongLines
 	pager.ShowLineNumbers = !options.NoLineNumbers
 	pager.QuitIfOneScreen = options.QuitIfOneScreen
-
-	screen, e := twin.NewScreen()
-	if e != nil {
-		// Screen setup failed
-		return e
-	}
 
 	style := internal.GetStyleForScreen(screen)
 	reader.SetStyleForHighlighting(style)
@@ -181,14 +230,16 @@ func pageFromReader(reader *internalReader.ReaderImpl, options Options) error {
 		if panicMessage != nil {
 			// Clarify that any screen shutdown logs are from panic handling,
 			// not something the user or some external thing did.
-			log.Info("Panic detected, closing screen before informing the user...")
+			log.Info("Panic detected, cleaning up before re-raising...")
 		}
 
-		// Restore screen...
-		screen.Close()
+		if shouldCloseScreen {
+			// Restore screen...
+			screen.Close()
+		}
 
-		// ... before printing any panic() output, otherwise the output will
-		// have broken linefeeds and be hard to follow.
+		// ... before panicking, otherwise the output will have broken linefeeds
+		// and be hard to follow.
 		if panicMessage != nil {
 			panic(panicMessage)
 		}

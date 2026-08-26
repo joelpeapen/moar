@@ -1,6 +1,7 @@
 package textstyles
 
 import (
+	"slices"
 	"unicode"
 
 	"github.com/walles/moor/v2/twin"
@@ -86,8 +87,7 @@ func (runes CellWithMetadataSlice) WithoutSpaceLeft() CellWithMetadataSlice {
 
 // Returns a copy of the slice with trailing whitespace removed
 func (runes CellWithMetadataSlice) WithoutSpaceRight() CellWithMetadataSlice {
-	for i := len(runes) - 1; i >= 0; i-- {
-		cell := runes[i]
+	for i, cell := range slices.Backward(runes) {
 		if !unicode.IsSpace(cell.Rune) {
 			return runes[0 : i+1]
 		}

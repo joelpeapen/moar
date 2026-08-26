@@ -628,8 +628,7 @@ func pagerFromArgs(
 
 	pager.TargetLine = targetLine
 	if *follow && pager.TargetLine == nil {
-		reallyHigh := linemetadata.IndexMax()
-		pager.TargetLine = &reallyHigh
+		pager.TargetLine = new(linemetadata.IndexMax())
 	}
 
 	return pager, screen, style, &formatter, logsRequested, nil
